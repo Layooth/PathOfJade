@@ -1,0 +1,63 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="PathOfJade"
+config/description="《玉简问道》东方修仙题材增量挂机放置游戏（移动端竖屏优先）"
+config/version="0.0.4beta"
+run/main_scene="res://ui/BootScene.tscn"
+config/use_custom_user_dir=true
+config/custom_user_dir_name="Jade Codex"
+config/quit_on_go_back=false
+config/features=PackedStringArray("4.7", "GL Compatibility")
+run/max_fps=60
+boot_splash/bg_color=Color(0.96, 0.945, 0.91, 1)
+boot_splash/image="res://assets/images/splash_boot_portrait.png"
+
+[autoload]
+
+EventBus="*res://core/autoloads/EventBus.gd"
+DataRegistry="*res://core/autoloads/DataRegistry.gd"
+IconLibrary="*res://core/autoloads/IconLibrary.gd"
+GameState="*res://core/autoloads/GameState.gd"
+BountyManager="*res://core/autoloads/BountyManager.gd"
+FarmManager="*res://core/autoloads/FarmManager.gd"
+ActionRunner="*res://core/autoloads/ActionRunner.gd"
+CombatEngine="*res://core/autoloads/CombatEngine.gd"
+AudioManager="*res://core/autoloads/AudioManager.gd"
+SaveManager="*res://core/autoloads/SaveManager.gd"
+CloudSaveManager="*res://core/autoloads/CloudSaveManager.gd"
+SceneTransition="*res://core/autoloads/SceneTransition.gd"
+
+[debug]
+
+file_logging/max_log_files=2
+
+[display]
+
+window/size/viewport_width=450
+window/size/viewport_height=800
+window/size/window_width_override=450
+window/size/window_height_override=800
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=6
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+environment/defaults/default_clear_color=Color(0.956863, 0.937255, 0.901961, 1)

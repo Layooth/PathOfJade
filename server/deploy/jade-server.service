@@ -1,0 +1,40 @@
+[Unit]
+Description=Jade Codex lightweight cloud save & patch server
+Documentation=file:/opt/jade-server/README_DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jade
+Group=jade
+WorkingDirectory=/opt/jade-server
+ExecStart=/opt/jade-server/jade-server
+Restart=on-failure
+RestartSec=3
+
+# 监听地址与数据目录（按实际部署修改）
+# 端口优先级：PORT > JADE_ADDR > 默认 :28473；二者皆可，留空则走默认
+Environment=JADE_ADDR=:28473
+Environment=JADE_DATA_DIR=/opt/jade-server/data
+Environment=JADE_PATCH_DIR=/opt/jade-server/patches
+
+# 生产环境务必在 /etc/jade-server.env 中设置以下两项（不要写进版本库）：
+#   JADE_JWT_SECRET=<随机 64 位十六进制字符串>
+#   JADE_ADMIN_KEY=<管理员发版密钥>
+EnvironmentFile=-/etc/jade-server.env
+
+# 轻量加固：只允许写数据目录与补丁目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/jade-server/data /opt/jade-server/patches
+
+# 单实例日志量很小，交给 journald 轮转即可
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=jade-server
+
+[Install]
+WantedBy=multi-user.target

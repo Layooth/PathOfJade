@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://81mdhjeh7ibf"]
+
+[ext_resource type="Script" uid="uid://316egyuuqs7l" path="res://ui/MainShell.gd" id="1_shell"]
+
+[node name="MainShell" type="Control" unique_id=230965224]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_shell")

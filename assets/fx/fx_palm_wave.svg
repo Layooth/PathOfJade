@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="palmInk" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#2C2A26" stop-opacity="0.35"/>
+      <stop offset="70%" stop-color="#8C6223" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#D4A243" stop-opacity="0.95"/>
+    </linearGradient>
+  </defs>
+  <path d="M 45 14 Q 56 32 45 50" stroke="#C8922E" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+  <path d="M 52 19 Q 61 32 52 45" stroke="#1F5C4D" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-opacity="0.8"/>
+  <path d="M 14 27 C 14 21, 20 19, 25 21 L 34 15 C 36 14, 38 16, 37 18 L 30 23 L 40 20 C 42 19.5, 43.5 22, 41.5 23.5 L 32 27 L 42 26.5 C 44 26.5, 44.5 29.5, 42.5 30 L 32 31.5 L 40 33.5 C 42 34, 41.5 37, 39.5 36.8 L 30 35.5 L 34 40.5 C 35.5 42, 33.5 44, 31.5 42.8 L 22 37 C 17 35, 14 32, 14 27 Z" fill="url(#palmInk)" stroke="#2C2A26" stroke-width="1" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>玉简问道 · 掌教云篆台</title>
+<style>
+  :root{
+    --paper:#F7F3E8; --paper-deep:#EEE7D8; --card:#FFFDF7;
+    --ink:#2C2A26; --ink-soft:#6B6458; --ink-mute:#948B7C;
+    --jade:#1F5C4D; --jade-soft:#E4EFEA; --jade-line:#A9C8BE;
+    --gold:#C8922E; --gold-soft:#F5E8C9; --cinnabar:#B84A39;
+    --line:#D8CEBB; --shadow:0 10px 30px rgba(44,42,38,.08);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:
+      radial-gradient(circle at 18% 8%,rgba(255,255,255,.85),transparent 42%),
+      radial-gradient(circle at 82% 90%,rgba(200,146,46,.08),transparent 45%),
+      var(--paper);
+    color:var(--ink); font:14px/1.6 "Noto Serif SC","Songti SC","Microsoft YaHei",serif;
+    min-height:100vh;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 18px 60px}
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+  h1{margin:0;font-size:30px;letter-spacing:.14em;font-weight:600}
+  .sub{color:var(--ink-soft);font-size:13px;margin-top:4px;letter-spacing:.06em}
+  .seal{display:inline-block;margin-left:8px;padding:2px 8px;border:1px solid var(--gold);color:var(--gold);border-radius:3px;font-size:12px;letter-spacing:.08em}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:18px;box-shadow:var(--shadow);position:relative;
+  }
+  .card::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;border-radius:10px 10px 0 0;
+    background:linear-gradient(90deg,var(--jade),var(--gold),transparent)}
+  .card h2{margin:0 0 4px;font-size:17px;letter-spacing:.08em}
+  .card h3{margin:14px 0 6px;font-size:14px;letter-spacing:.06em;color:var(--ink-soft)}
+  .hint{color:var(--ink-mute);font-size:12px;margin:0 0 14px}
+  .keybar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input[type=text],input[type=password],input[type=number],select{
+    width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:6px;
+    background:var(--paper);color:var(--ink);font:13px/1.4 inherit;outline:none;
+  }
+  input:focus,select:focus{border-color:var(--jade);box-shadow:0 0 0 2px var(--jade-soft)}
+  .keybar input{flex:1 1 260px;width:auto}
+  button{
+    cursor:pointer;border:1px solid transparent;border-radius:6px;padding:9px 14px;
+    font:13px/1.2 inherit;letter-spacing:.05em;transition:.18s;
+  }
+  .btn-jade{background:var(--jade);color:#FFFDF7}
+  .btn-jade:hover{filter:brightness(1.1)}
+  .btn-gold{background:var(--gold);color:#2C2A26}
+  .btn-gold:hover{filter:brightness(1.06)}
+  .btn-line{background:transparent;border-color:var(--line);color:var(--ink-soft)}
+  .btn-line:hover{border-color:var(--jade);color:var(--jade)}
+  .btn-danger{background:transparent;border-color:#DDB5AC;color:var(--cinnabar)}
+  .btn-danger:hover{background:#F8E9E5}
+  .btn-mini{padding:5px 9px;font-size:12px}
+  .state{font-size:12px;color:var(--ink-mute);min-height:20px}
+  .state.ok{color:var(--jade)} .state.err{color:var(--cinnabar)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:16px;margin:16px 0}
+  .field{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
+  .field label{font-size:12px;color:var(--ink-soft);letter-spacing:.06em}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .row > *{flex:1 1 140px}
+  .row button{flex:0 0 auto}
+  .result{
+    margin-top:12px;padding:12px;border:1px dashed var(--jade-line);border-radius:6px;
+    background:var(--jade-soft);color:#1B4A3E;font-size:13px;white-space:pre-wrap;word-break:break-all;
+  }
+  .result:empty{display:none}
+  .tablecard{margin-top:16px}
+  .tabletools{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+  .tablewrap{overflow:auto;border:1px solid var(--line);border-radius:8px;background:#FFFEFA}
+  table{width:100%;border-collapse:collapse;min-width:940px;font-size:12.5px}
+  th,td{padding:9px 10px;border-bottom:1px solid #EDE6D8;text-align:left;white-space:nowrap}
+  th{background:var(--paper-deep);color:var(--ink-soft);font-weight:600;letter-spacing:.04em}
+  tbody tr:hover{background:#FBF7ED}
+  td.ops{display:flex;gap:6px}
+  .muted{color:var(--ink-mute)}
+  .tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;border:1px solid var(--line);color:var(--ink-soft)}
+  .tag.jade{border-color:var(--jade-line);background:var(--jade-soft);color:var(--jade)}
+  .tag.gold{border-color:#E3C98C;background:var(--gold-soft);color:#8C6223}
+  footer{margin-top:26px;text-align:center;color:var(--ink-mute);font-size:12px;letter-spacing:.08em}
+  /* 密钥收起态紧凑状态条 */
+  .headright{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .key-strip{
+    display:none;cursor:pointer;padding:6px 12px;border:1px solid var(--jade-line);
+    border-radius:14px;background:var(--jade-soft);color:var(--jade);
+    font-size:12px;letter-spacing:.05em;
+  }
+  .key-strip:hover{background:#D6E7E0}
+  .key-strip .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:var(--jade);margin-right:6px;vertical-align:middle}
+  /* 宗门概览 5 格统计 */
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:10px}
+  .stat{
+    padding:12px 10px;border:1px solid var(--line);border-radius:8px;
+    background:var(--paper);text-align:center;
+  }
+  .stat-num{font-size:23px;font-weight:600;letter-spacing:.03em;color:var(--jade)}
+  .stat-label{font-size:11.5px;color:var(--ink-soft);margin-top:3px;letter-spacing:.05em}
+  /* 补丁历史列表 */
+  .patch-hist{margin-top:14px;border-top:1px dashed var(--line);padding-top:10px}
+  .patch-item{
+    padding:9px 10px;border:1px solid var(--line);border-radius:7px;
+    background:var(--paper);margin-bottom:8px;font-size:12px;line-height:1.65;
+  }
+  .patch-item .rev{color:var(--gold);font-weight:600;margin-right:8px}
+  .patch-item .fn{color:var(--ink);margin-right:8px}
+  .patch-item .meta{color:var(--ink-mute);font-size:11px}
+  .patch-item .notes{color:var(--ink-soft);margin-top:2px}
+  .patch-item .patch-ops{display:flex;justify-content:flex-end;margin-top:6px}
+  /* 名录搜索与排序 */
+  .toolinput{flex:1 1 220px;width:auto}
+  .toolselect{flex:0 0 170px;width:auto}
+  .online{color:var(--jade);font-weight:600}
+  .offline{color:var(--ink-mute)}
+  /* 仙盟传书 */
+  .mail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  .mail-items{display:flex;flex-direction:column;gap:8px;margin:8px 0 4px}
+  .mail-item-row{display:grid;grid-template-columns:1.2fr .5fr .9fr auto;gap:8px;align-items:center}
+  .mail-item-hint{font-size:11px;color:var(--ink-mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mail-item-hint.match{color:var(--jade)}
+  .mail-hist{max-height:320px;overflow:auto;border-top:1px dashed var(--line);margin-top:14px;padding-top:8px}
+  .mail-hist-item{padding:9px 10px;border:1px solid var(--line);border-radius:7px;background:var(--paper);margin-bottom:8px;font-size:12px;line-height:1.65}
+  .mail-hist-item .meta{color:var(--ink-mute);font-size:11px}
+  @media (max-width:760px){ .mail-grid{grid-template-columns:1fr} }
+  @media (max-width:640px){
+    h1{font-size:24px} .wrap{padding:18px 12px 46px}
+    .card{padding:14px}
+    .stats{grid-template-columns:repeat(2,1fr)}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>玉简问道<span class="seal">掌教云篆台</span></h1>
+      <div class="sub">仙籍发放 · 云篆总览 · 天道演化</div>
+    </div>
+    <div class="headright">
+      <button class="key-strip" id="keyStrip"><span class="dot"></span>密钥有效 · 切换密钥</button>
+      <div class="state" id="keyState">尚未验证掌教密钥</div>
+    </div>
+  </header>
+
+  <section class="card" id="keyCard">
+    <div class="keybar">
+      <input id="adminKey" type="password" autocomplete="off" placeholder="输入 JADE_ADMIN_KEY">
+      <button class="btn-jade" id="verifyBtn">验证进入</button>
+      <button class="btn-line" id="clearBtn">清除密钥</button>
+    </div>
+    <div class="hint" style="margin:8px 0 0">密钥仅保存在本浏览器 sessionStorage，用于请求头 X-Admin-Key；关闭标签页即失效。</div>
+  </section>
+
+  <section class="card" id="overviewCard" style="display:none">
+    <h2>宗门概览</h2>
+    <div class="stats">
+      <div class="stat"><div class="stat-num" id="statTotal">—</div><div class="stat-label">总仙籍数</div></div>
+      <div class="stat"><div class="stat-num" id="statSave">—</div><div class="stat-label">已有云档数</div></div>
+      <div class="stat"><div class="stat-num" id="statActive">—</div><div class="stat-label">近 24 小时活跃</div></div>
+      <div class="stat"><div class="stat-num" id="statOnline">—</div><div class="stat-label">当前在线</div></div>
+      <div class="stat"><div class="stat-num" id="statPatch">—</div><div class="stat-label">天道补丁卷数</div></div>
+    </div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>新立仙籍（发放账号）</h2>
+      <p class="hint">内测期间关闭自助注册与游客建号，请由掌教在此发放道号与初始密令。</p>
+      <div class="field"><label>道号（2~16 字）</label><input id="newUsername" type="text" maxlength="16" placeholder="如：青云子"></div>
+      <div class="field"><label>初始密令（至少 6 位）</label><input id="newPassword" type="text" maxlength="72" placeholder="交给玩家的初始密令"></div>
+      <div class="row">
+        <button class="btn-jade" id="createBtn">生成账号</button>
+      </div>
+      <div class="result" id="createResult"></div>
+      <div class="row" id="copyRow" style="margin-top:10px;display:none">
+        <button class="btn-line btn-mini" id="copyBtn" style="flex:0 0 auto">复制「道号 / 密令」</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>天道演化（热更发版）</h2>
+      <p class="hint">选择 .pck，填写版本号与说明；服务端自动计算 SHA256 并更新 manifest。</p>
+      <div class="field"><label>灵纹补丁（.pck）</label><input id="pckFile" type="file" accept=".pck"></div>
+      <div class="row">
+        <div class="field" style="flex:1 1 120px"><label>版本号 patch_rev</label><input id="patchRev" type="number" min="1" step="1" placeholder="1"></div>
+        <div class="field" style="flex:2 1 200px"><label>更新说明 notes</label><input id="patchNotes" type="text" maxlength="500" placeholder="如：新增坊市界面"></div>
+      </div>
+      <div class="row">
+        <button class="btn-gold" id="publishBtn">发布灵纹补丁</button>
+      </div>
+      <div class="result" id="publishResult"></div>
+      <div class="patch-hist">
+        <h3>补丁历史</h3>
+        <div id="patchList"><div class="muted">暂无补丁。</div></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card tablecard">
+    <div class="tabletools">
+      <div>
+        <h2>仙籍名录与云篆总览</h2>
+        <p class="hint" style="margin-bottom:0">联表 users 与 cloud_saves，展示所有已发放账号。</p>
+      </div>
+      <button class="btn-line btn-mini" id="refreshBtn">刷新名录</button>
+    </div>
+    <div class="tabletools">
+      <input class="toolinput" id="userSearch" type="text" placeholder="按道号关键字过滤…">
+      <select class="toolselect" id="userSort">
+        <option value="sync">最近同步</option>
+        <option value="realm">境界最高</option>
+        <option value="stones">灵石最多</option>
+        <option value="tower">镇魔塔层数</option>
+      </select>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>UID</th><th>道号</th><th>创建时间</th><th>状态</th><th>云篆版本</th>
+            <th>当前境界</th><th>灵石</th><th>镇魔塔</th><th>累计修行</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="userRows">
+          <tr><td colspan="10" class="muted">请先验证掌教密钥。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="state" id="listState"></div>
+  </section>
+
+  <section class="card" id="mailCard" style="margin-top:16px">
+    <div class="tabletools">
+      <div>
+        <h2>仙盟传书（下发物资）</h2>
+        <p class="hint" style="margin-bottom:0">可发给全服同道或指定道号；领取由服务端事务保证每人仅一次。</p>
+      </div>
+      <button class="btn-line btn-mini" id="refreshMailBtn">刷新传书</button>
+    </div>
+    <div class="mail-grid">
+      <div>
+        <div class="field"><label>收件对象</label><select id="mailTarget"></select></div>
+        <div class="field"><label>标题（1~60 字）</label><input id="mailTitle" type="text" maxlength="60" placeholder="如：宗门新礼"></div>
+        <div class="field"><label>正文</label><input id="mailBody" type="text" placeholder="简要说明"></div>
+      </div>
+      <div>
+        <div class="row">
+          <div class="field" style="flex:1"><label>灵石</label><input id="mailStones" type="number" min="0" step="1" value="0"></div>
+          <div class="field" style="flex:1"><label>有效期（天，0 永久）</label><input id="mailExpireDays" type="number" min="0" max="3650" step="1" value="7"></div>
+        </div>
+        <h3>随信物品</h3>
+        <datalist id="jade-item-catalog"></datalist>
+        <div class="mail-items" id="mailItems"></div>
+        <button class="btn-line btn-mini" id="addMailItemBtn" type="button">＋ 添加物品</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn-jade" id="sendMailBtn">发出传书</button>
+      <span class="state" id="mailState"></span>
+    </div>
+    <div class="mail-hist" id="mailHistory"><div class="muted">请先验证掌教密钥。</div></div>
+  </section>
+
+  <footer>玉简问道 · 内测管理后台 · 无外部依赖</footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const KEY_STORE = "jade_admin_key";
+  let adminKey = sessionStorage.getItem(KEY_STORE) || "";
+  let lastCreated = null;
+  let allUsers = [];
+  const $ = (id) => document.getElementById(id);
+
+  // 静态只读物品目录：由 core/autoloads/DataRegistry.gd 的 ITEM_DEFS 提取，
+  // 仅保留 id/name/category_label，排除纯货币灵石本身；单文件内嵌，无外部请求。
+  const JADE_ITEM_CATALOG = [{"id":"item_qingye","name":"青叶草","category_label":"材料"},{"id":"item_ninglu","name":"凝露花","category_label":"材料"},{"id":"item_qingling_wood","name":"青灵木","category_label":"材料"},{"id":"item_crude_iron","name":"粗玄铁","category_label":"材料"},{"id":"item_beast_core","name":"妖兽内丹","category_label":"材料"},{"id":"item_qi_pill","name":"聚气丹","category_label":"消耗品"},{"id":"item_heal_powder","name":"回春散","category_label":"消耗品"},{"id":"item_foundation_pill","name":"筑基丹","category_label":"消耗品"},{"id":"item_earth_talisman","name":"厚土护身符","category_label":"消耗品"},{"id":"equip_iron_sword","name":"玄铁飞剑","category_label":"装备"},{"id":"equip_iron_robe","name":"玄铁法袍","category_label":"装备"},{"id":"seed_qingye","name":"青叶草灵种","category_label":"材料"},{"id":"seed_ninglu","name":"凝露花灵种","category_label":"材料"},{"id":"seed_spirit_berry","name":"赤阳灵果种","category_label":"材料"},{"id":"item_spirit_berry","name":"赤阳灵果","category_label":"消耗品"},{"id":"item_ziyun","name":"紫云芝","category_label":"材料"},{"id":"item_chiyan","name":"赤焰草","category_label":"材料"},{"id":"item_ironwood","name":"铁心木","category_label":"材料"},{"id":"item_thunderwood","name":"雷击沉香木","category_label":"材料"},{"id":"item_mithril","name":"秘银矿","category_label":"材料"},{"id":"item_redgold","name":"赤铜精金","category_label":"材料"},{"id":"item_demon_essence","name":"妖将精魄","category_label":"材料"},{"id":"seed_ziyun","name":"紫云芝灵种","category_label":"材料"},{"id":"seed_chiyan","name":"赤焰草灵种","category_label":"材料"},{"id":"item_peiyuan_pill","name":"筑基培元丹","category_label":"消耗品"},{"id":"item_big_heal","name":"大回春丹","category_label":"消耗品"},{"id":"item_jindan_pill","name":"结金丹","category_label":"消耗品"},{"id":"item_turtle_talisman","name":"玄龟盾符","category_label":"消耗品"},{"id":"item_thunder_talisman","name":"引雷攻伐符","category_label":"消耗品"},{"id":"equip_mithril_sword","name":"秘银流光剑","category_label":"装备"},{"id":"equip_mithril_armor","name":"玄龟秘银甲","category_label":"装备"},{"id":"equip_redgold_sword","name":"赤金破军剑","category_label":"装备"},{"id":"equip_redgold_robe","name":"流火金丝袍","category_label":"装备"},{"id":"item_hansui","name":"寒髓草","category_label":"材料"},{"id":"item_xinghui","name":"星辉灵芝","category_label":"材料"},{"id":"item_icewood","name":"万年玄冰木","category_label":"材料"},{"id":"item_starwood","name":"星纹梧桐木","category_label":"材料"},{"id":"item_stariron","name":"星辰陨铁","category_label":"材料"},{"id":"item_primordial_crystal","name":"太初灵晶","category_label":"材料"},{"id":"item_star_core","name":"星辰核心","category_label":"材料"},{"id":"item_ancient_soul","name":"上古残魂","category_label":"材料"},{"id":"item_gold_pill","name":"三转金丹","category_label":"消耗品"},{"id":"item_heart_pill","name":"九转护心丹","category_label":"消耗品"},{"id":"item_nascent_pill","name":"化婴丹","category_label":"消耗品"},{"id":"item_taiji_talisman","name":"太极金光符","category_label":"消耗品"},{"id":"item_zixiao_talisman","name":"紫霄神雷符","category_label":"消耗品"},{"id":"equip_star_sword","name":"星陨流光剑","category_label":"装备"},{"id":"equip_ice_armor","name":"玄冰星辰甲","category_label":"装备"},{"id":"equip_primordial_sword","name":"太初斩星剑","category_label":"装备"},{"id":"equip_primordial_robe","name":"太初星袍","category_label":"装备"},{"id":"seed_hansui","name":"寒髓草灵种","category_label":"材料"},{"id":"seed_xinghui","name":"星辉灵芝种","category_label":"材料"},{"id":"seed_jiuye","name":"九叶仙芝种","category_label":"材料"},{"id":"seed_biyu","name":"碧玉灵参种","category_label":"材料"},{"id":"seed_longxue","name":"龙血草灵种","category_label":"材料"},{"id":"seed_taiyi","name":"太乙青莲种","category_label":"材料"},{"id":"seed_hundun","name":"混沌道花种","category_label":"材料"},{"id":"seed_hongmeng","name":"鸿蒙不死药种","category_label":"材料"},{"id":"item_jiuye","name":"九叶仙芝","category_label":"材料"},{"id":"item_fusang","name":"扶桑神木","category_label":"材料"},{"id":"item_taixu_gold","name":"太虚仙金","category_label":"材料"},{"id":"item_thunder_essence","name":"太虚雷精","category_label":"材料"},{"id":"item_dragon_scale","name":"真龙残鳞","category_label":"材料"},{"id":"item_yuanying_pill","name":"元婴培神丹","category_label":"消耗品"},{"id":"item_revive_pill","name":"九转还魂丹","category_label":"消耗品"},{"id":"item_ascension_pill","name":"渡劫飞升丹","category_label":"消耗品"},{"id":"item_taixu_shield","name":"太虚金光符","category_label":"消耗品"},{"id":"item_taixu_thunder","name":"太虚天雷符","category_label":"消耗品"},{"id":"equip_taixu_sword","name":"太虚斩道剑","category_label":"装备"},{"id":"equip_taixu_robe","name":"太虚混元仙袍","category_label":"装备"},{"id":"item_spirit_dew","name":"聚灵甘露","category_label":"消耗品"},{"id":"item_crimson_fruit","name":"百年朱果","category_label":"消耗品"},{"id":"item_biyu_shen","name":"碧玉灵参","category_label":"材料"},{"id":"item_chiyan_wutong","name":"赤焰梧桐","category_label":"材料"},{"id":"item_hanyu","name":"寒玉髓矿","category_label":"材料"},{"id":"item_longxue","name":"龙血草","category_label":"材料"},{"id":"item_jianmu","name":"建木灵枝","category_label":"材料"},{"id":"item_jiuyou_crystal","name":"九幽玄晶","category_label":"材料"},{"id":"item_huashen_pill","name":"化神培元丹","category_label":"消耗品"},{"id":"item_trib_huashen","name":"化神丹","category_label":"消耗品"},{"id":"item_huashen_note","name":"幽冥残卷","category_label":"材料"},{"id":"equip_jiuyou_sword","name":"九幽斩仙剑","category_label":"装备"},{"id":"equip_mingyuan_armor","name":"冥渊玄晶甲","category_label":"装备"},{"id":"item_xuanbing_talisman","name":"玄冰护体符","category_label":"消耗品"},{"id":"item_jiuyou_ward","name":"九幽镇魂符","category_label":"消耗品"},{"id":"item_taiyi_lian","name":"太乙青莲","category_label":"材料"},{"id":"item_xingchen_sang","name":"星辰神桑","category_label":"材料"},{"id":"item_xingyun_iron","name":"星陨神铁","category_label":"材料"},{"id":"item_lianxu_pill","name":"炼虚归真丹","category_label":"消耗品"},{"id":"item_trib_lianxu","name":"炼虚丹","category_label":"消耗品"},{"id":"equip_xinghe_sword","name":"星河破虚剑","category_label":"装备"},{"id":"equip_xingchen_robe","name":"星辰道袍","category_label":"装备"},{"id":"item_xingyun_ward","name":"星陨灭魔符","category_label":"消耗品"},{"id":"item_hundun_flower","name":"混沌道花","category_label":"材料"},{"id":"item_hundun_vine","name":"混沌青藤木","category_label":"材料"},{"id":"item_hundun_stone","name":"混沌母气石","category_label":"材料"},{"id":"item_heti_pill","name":"合体混元丹","category_label":"消耗品"},{"id":"item_trib_heti","name":"合体丹","category_label":"消耗品"},{"id":"equip_hundun_axe","name":"混沌开天斧","category_label":"装备"},{"id":"equip_hunyuan_robe","name":"混元宝衣","category_label":"装备"},{"id":"item_hundun_ward","name":"混沌金刚符","category_label":"消耗品"},{"id":"item_hongmeng_herb","name":"鸿蒙不死药","category_label":"材料"},{"id":"item_worldtree","name":"世界树心木","category_label":"材料"},{"id":"item_hongmeng_gold","name":"鸿蒙紫金","category_label":"材料"},{"id":"item_dacheng_pill","name":"大乘造化丹","category_label":"消耗品"},{"id":"item_trib_dacheng","name":"大乘丹","category_label":"消耗品"},{"id":"equip_hongmeng_sword","name":"鸿蒙诛仙剑","category_label":"装备"},{"id":"equip_zaohua_robe","name":"造化仙衣","category_label":"装备"},{"id":"item_hongmeng_thunder","name":"鸿蒙紫霄神雷符","category_label":"消耗品"},{"id":"item_qingxin_pill","name":"护道清心丹","category_label":"消耗品"},{"id":"item_jiuzhuan_pill","name":"九转回元丹","category_label":"消耗品"}];
+
+  function setState(el, text, ok){
+    el.textContent = text || "";
+    el.classList.remove("ok", "err");
+    if (ok === true) el.classList.add("ok");
+    if (ok === false) el.classList.add("err");
+  }
+
+  async function api(path, options){
+    const opts = Object.assign({}, options || {});
+    const headers = Object.assign({}, opts.headers || {});
+    if (adminKey) headers["X-Admin-Key"] = adminKey;
+    if (opts.body && !(opts.body instanceof FormData)) {
+      headers["Content-Type"] = "application/json";
+    }
+    opts.headers = headers;
+    let response;
+    try {
+      response = await fetch(path, opts);
+    } catch (e) {
+      const err = new Error("无法连接服务器");
+      err.status = 0;
+      throw err;
+    }
+    let payload = null;
+    try { payload = await response.json(); } catch (e) { payload = null; }
+    if (!response.ok || (payload && payload.code !== 0)) {
+      const message = (payload && payload.message) || ("请求失败（" + response.status + "）");
+      const err = new Error(message);
+      err.status = response.status;
+      throw err;
+    }
+    return payload ? payload.data : null;
+  }
+
+  function formatTime(unix){
+    if (!unix || unix <= 0) return "—";
+    const d = new Date(unix * 1000);
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate()) + " " +
+      p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  function formatPlay(seconds){
+    const total = Math.max(0, Number(seconds) || 0);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    return h > 0 ? (h + "时" + m + "分") : (m + "分");
+  }
+
+  function formatBytes(n){
+    const v = Number(n) || 0;
+    if (v >= 1048576) return (v / 1048576).toFixed(1) + " MB";
+    if (v >= 1024) return Math.round(v / 1024) + " KB";
+    return v + " B";
+  }
+
+  // 紧凑灵石文本（「1.5万」「2亿」/纯数字）折算为数值，用于「灵石最多」排序
+  function parseStones(s){
+    if (s === null || s === undefined) return 0;
+    const t = String(s).trim();
+    if (!t) return 0;
+    let mult = 1, body = t;
+    if (body.endsWith("亿")) { mult = 100000000; body = body.slice(0, -1); }
+    else if (body.endsWith("万")) { mult = 10000; body = body.slice(0, -1); }
+    const v = parseFloat(body);
+    return isNaN(v) ? 0 : v * mult;
+  }
+
+  function cell(tr, text, className){
+    const td = document.createElement("td");
+    td.textContent = text;
+    if (className) td.className = className;
+    tr.appendChild(td);
+    return td;
+  }
+
+  // ---------------- 密钥栏收起 / 展开 ----------------
+  function collapseKey(){
+    $("keyCard").style.display = "none";
+    $("keyStrip").style.display = "inline-block";
+    $("overviewCard").style.display = "block";
+  }
+  function expandKey(){
+    $("keyCard").style.display = "block";
+    $("keyStrip").style.display = "none";
+  }
+
+  // ---------------- 宗门概览 ----------------
+  function renderStats(data){
+    if (!data) return;
+    $("statTotal").textContent = data.total_users != null ? data.total_users : "—";
+    $("statSave").textContent = data.users_with_save != null ? data.users_with_save : "—";
+    $("statActive").textContent = data.active_24h != null ? data.active_24h : "—";
+    $("statOnline").textContent = data.online_count != null ? data.online_count : "—";
+    $("statPatch").textContent = Array.isArray(data.patches) ? data.patches.length :
+      (data.latest_patch_rev != null ? data.latest_patch_rev : "—");
+    renderPatches(data.patches);
+  }
+
+  function renderPatches(patches){
+    const box = $("patchList");
+    box.replaceChildren();
+    if (!patches || patches.length === 0) {
+      const d = document.createElement("div");
+      d.className = "muted"; d.textContent = "暂无补丁。";
+      box.appendChild(d);
+      return;
+    }
+    const sorted = patches.slice().sort((a, b) => b.rev - a.rev);
+    for (const p of sorted) {
+      const item = document.createElement("div");
+      item.className = "patch-item";
+      const head = document.createElement("div");
+      const rev = document.createElement("span");
+      rev.className = "rev"; rev.textContent = "第 " + p.rev + " 卷";
+      const fn = document.createElement("span");
+      fn.className = "fn"; fn.textContent = p.filename || "—";
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = formatBytes(p.size) + " · SHA256 " +
+        String(p.sha256 || "").slice(0, 12) + " · " + formatTime(p.created_at);
+      head.appendChild(rev); head.appendChild(fn); head.appendChild(meta);
+      item.appendChild(head);
+      if (p.notes) {
+        const notes = document.createElement("div");
+        notes.className = "notes"; notes.textContent = p.notes;
+        item.appendChild(notes);
+      }
+      const ops = document.createElement("div");
+      ops.className = "patch-ops";
+      const del = document.createElement("button");
+      del.className = "btn-danger btn-mini";
+      del.textContent = "撤回";
+      del.addEventListener("click", () => deletePatch(p.rev, del));
+      ops.appendChild(del);
+      item.appendChild(ops);
+      box.appendChild(item);
+    }
+  }
+
+  async function deletePatch(rev, button){
+    if (!confirm("确认撤回第 " + rev + " 卷补丁？撤回后未更新的道友将不再下载该卷。")) return;
+    button.disabled = true;
+    if ($("publishResult")) $("publishResult").textContent = "正在撤回第 " + rev + " 卷补丁…";
+    try {
+      await api("/api/admin/patches/delete", {
+        method: "POST", body: JSON.stringify({patch_rev: rev})
+      });
+      if ($("publishResult")) $("publishResult").textContent =
+        "第 " + rev + " 卷补丁已撤回。";
+      await refreshOverview();
+    } catch (e) {
+      if ($("publishResult")) $("publishResult").textContent = e.message;
+      button.disabled = false;
+      alert(e.message);
+    }
+  }
+
+  // ---------------- 名录过滤 / 排序 / 渲染 ----------------
+  function applyUserView(){
+    const q = ($("userSearch").value || "").trim().toLowerCase();
+    let list = allUsers.slice();
+    if (q) {
+      list = list.filter((u) => String(u.username || "").toLowerCase().includes(q));
+    }
+    const mode = $("userSort").value;
+    list.sort((a, b) => {
+      if (mode === "realm") {
+        if ((b.realm_order || 0) !== (a.realm_order || 0)) return (b.realm_order || 0) - (a.realm_order || 0);
+        return (b.cultivation_xp || 0) - (a.cultivation_xp || 0);
+      }
+      if (mode === "stones") return parseStones(b.spirit_stones) - parseStones(a.spirit_stones);
+      if (mode === "tower") return (b.tower_floor || 0) - (a.tower_floor || 0);
+      return (b.save_updated_at || 0) - (a.save_updated_at || 0);
+    });
+    renderUsers(list);
+  }
+
+  function renderUsers(users){
+    const tbody = $("userRows");
+    tbody.replaceChildren();
+    if (!users || users.length === 0) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 10; td.className = "muted"; td.textContent = "暂无仙籍。";
+      tr.appendChild(td); tbody.appendChild(tr);
+      return;
+    }
+    for (const u of users) {
+      const tr = document.createElement("tr");
+      cell(tr, String(u.uid));
+      cell(tr, u.username || "—");
+      cell(tr, formatTime(u.created_at), "muted");
+      const status = cell(tr, u.is_online ? "● 在线" : "离线",
+        u.is_online ? "online" : "offline");
+      status.title = u.is_online ? "2.5 分钟内有活跃记录" :
+        ("最后活跃：" + formatTime(u.last_seen_at));
+      if (!u.is_online && u.last_seen_at > 0) status.textContent += " · " + formatTime(u.last_seen_at);
+      const revTd = cell(tr, u.has_save ? ("第 " + u.save_rev + " 版") : "尚未上传");
+      if (!u.has_save) revTd.className = "muted";
+      cell(tr, u.has_save ? (u.realm_name || "—") : "—");
+      cell(tr, u.has_save ? (u.spirit_stones || "—") : "—");
+      cell(tr, u.has_save && u.tower_floor ? (u.tower_floor + " 层") : "—");
+      cell(tr, u.has_save ? formatPlay(u.play_seconds) : "—");
+      const ops = document.createElement("td");
+      ops.className = "ops";
+      const mailBtn = document.createElement("button");
+      mailBtn.className = "btn-line btn-mini";
+      mailBtn.textContent = "传书";
+      mailBtn.addEventListener("click", () => pickMailTarget(u.uid, u.username));
+      const reset = document.createElement("button");
+      reset.className = "btn-line btn-mini";
+      reset.textContent = "重置密令";
+      reset.addEventListener("click", () => resetPassword(u.uid, u.username));
+      const del = document.createElement("button");
+      del.className = "btn-danger btn-mini";
+      del.textContent = "删除账号";
+      del.addEventListener("click", () => deleteUser(u.uid, u.username));
+      ops.appendChild(mailBtn); ops.appendChild(reset); ops.appendChild(del);
+      tr.appendChild(ops);
+      tbody.appendChild(tr);
+    }
+  }
+
+  async function refreshUsers(){
+    const state = $("listState");
+    try {
+      const data = await api("/api/admin/users");
+      allUsers = (data && data.users) ? data.users : [];
+      applyUserView();
+      setState(state, "已加载 " + allUsers.length + " 条仙籍。", true);
+      refreshOverview();
+    } catch (e) {
+      setState(state, e.message, false);
+      if (e.status === 401) handleKeyLost(e.message);
+    }
+  }
+
+  async function refreshOverview(){
+    try {
+      const data = await api("/api/admin/overview");
+      renderStats(data);
+    } catch (e) {
+      /* 概览失败不阻断名录 */
+    }
+  }
+
+  async function verifyKey(){
+    const input = $("adminKey");
+    adminKey = input.value.trim();
+    if (!adminKey) {
+      setState($("keyState"), "请先输入掌教密钥。", false);
+      return;
+    }
+    setState($("keyState"), "正在验证…");
+    try {
+      const data = await api("/api/admin/users");
+      sessionStorage.setItem(KEY_STORE, adminKey);
+      setState($("keyState"), "密钥有效 · 已进入掌教云篆台", true);
+      allUsers = (data && data.users) ? data.users : [];
+      applyUserView();
+      populateMailTargets();
+      setState($("listState"), "已加载 " + allUsers.length + " 条仙籍。", true);
+      collapseKey();
+      refreshOverview();
+      refreshMailHistory();
+    } catch (e) {
+      adminKey = "";
+      sessionStorage.removeItem(KEY_STORE);
+      setState($("keyState"), e.message, false);
+      if (e.status === 503) {
+        setState($("keyState"), "服务端未配置 JADE_ADMIN_KEY，管理接口已关闭。", false);
+      }
+    }
+  }
+
+  function handleKeyLost(message){
+    adminKey = "";
+    sessionStorage.removeItem(KEY_STORE);
+    expandKey();
+    $("overviewCard").style.display = "none";
+    setState($("keyState"), message || "密钥失效，请重新验证。", false);
+  }
+
+  async function createUser(){
+    const username = $("newUsername").value.trim();
+    const password = $("newPassword").value;
+    const result = $("createResult");
+    if (username.length < 2 || username.length > 16) {
+      result.textContent = "道号需为 2~16 个字符。";
+      return;
+    }
+    if (new TextEncoder().encode(password).length < 6) {
+      result.textContent = "初始密令至少 6 位。";
+      return;
+    }
+    $("createBtn").disabled = true;
+    result.textContent = "正在新立仙籍…";
+    try {
+      const data = await api("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify({username: username, password: password})
+      });
+      lastCreated = {uid: data.uid, username: data.username, password: password};
+      result.textContent = "仙籍已立\n道号：" + data.username + "\n密令：" + password +
+        "\nUID：" + data.uid;
+      $("copyRow").style.display = "flex";
+      await refreshUsers();
+    } catch (e) {
+      result.textContent = e.message;
+      if (e.status === 401) handleKeyLost(e.message);
+    } finally {
+      $("createBtn").disabled = false;
+    }
+  }
+
+  async function resetPassword(uid, username){
+    const value = prompt("为「" + username + "」设置新密令（至少 6 位）：", "");
+    if (value === null) return;
+    if (new TextEncoder().encode(value).length < 6) {
+      alert("密令至少 6 位。");
+      return;
+    }
+    try {
+      await api("/api/admin/users/reset_password", {
+        method: "POST",
+        body: JSON.stringify({uid: uid, new_password: value})
+      });
+      alert("「" + username + "」的密令已重置。");
+    } catch (e) {
+      alert(e.message);
+      if (e.status === 401) handleKeyLost(e.message);
+    }
+  }
+
+  async function deleteUser(uid, username){
+    if (!confirm("确认删除仙籍「" + username + "」及其云端玉简？此操作不可恢复。")) return;
+    try {
+      await api("/api/admin/users/" + uid, {method: "DELETE"});
+      await refreshUsers();
+    } catch (e) {
+      alert(e.message);
+      if (e.status === 401) handleKeyLost(e.message);
+    }
+  }
+
+  async function publishPatch(){
+    const file = $("pckFile").files[0];
+    const rev = Number($("patchRev").value);
+    const notes = $("patchNotes").value.trim();
+    const result = $("publishResult");
+    if (!file) { result.textContent = "请选择 .pck 文件。"; return; }
+    if (!Number.isInteger(rev) || rev <= 0) { result.textContent = "版本号需为正整数。"; return; }
+    const form = new FormData();
+    form.append("file", file);
+    form.append("patch_rev", String(rev));
+    form.append("notes", notes);
+    $("publishBtn").disabled = true;
+    result.textContent = "正在上传并校验灵纹…";
+    try {
+      const data = await api("/api/admin/publish_patch", {method: "POST", body: form});
+      result.textContent = "第 " + data.rev + " 卷已发布\n大小：" + data.size +
+        " 字节\nSHA256：" + data.sha256;
+      await refreshOverview();
+    } catch (e) {
+      result.textContent = e.message;
+      if (e.status === 401) handleKeyLost(e.message);
+    } finally {
+      $("publishBtn").disabled = false;
+    }
+  }
+
+  async function copyCreated(){
+    if (!lastCreated) return;
+    const text = "道号：" + lastCreated.username + " / 密令：" + lastCreated.password;
+    try {
+      await navigator.clipboard.writeText(text);
+      $("copyBtn").textContent = "已复制";
+    } catch (e) {
+      const area = document.createElement("textarea");
+      area.value = text;
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand("copy"); $("copyBtn").textContent = "已复制"; }
+      catch (err) { $("copyBtn").textContent = "复制失败，请手动选择"; }
+      area.remove();
+    }
+  }
+
+  // ---------------- 仙盟传书 ----------------
+  function populateMailTargets(){
+    const select = $("mailTarget");
+    const previous = select.value;
+    select.replaceChildren();
+    const all = document.createElement("option");
+    all.value = "0"; all.textContent = "全服同道";
+    select.appendChild(all);
+    for (const u of allUsers) {
+      const opt = document.createElement("option");
+      opt.value = String(u.uid);
+      opt.textContent = "UID " + u.uid + " · " + (u.username || "—");
+      select.appendChild(opt);
+    }
+    select.value = previous && Array.from(select.options).some((o) => o.value === previous)
+      ? previous : "0";
+  }
+
+  function initItemCatalog(){
+    const list = $("jade-item-catalog");
+    if (!list) return;
+    list.replaceChildren();
+    for (const item of JADE_ITEM_CATALOG) {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.label = item.name + " · " + item.category_label;
+      option.textContent = option.label;
+      list.appendChild(option);
+    }
+  }
+
+  function findCatalogItem(value){
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const key = raw.toLowerCase();
+    return JADE_ITEM_CATALOG.find((item) => item.id.toLowerCase() === key
+      || item.name === raw)
+      || JADE_ITEM_CATALOG.find((item) => item.name.includes(raw)
+      || item.id.toLowerCase().includes(key)) || null;
+  }
+
+  function updateItemHint(row){
+    const input = row.querySelector(".mail-item-id");
+    const hint = row.querySelector(".mail-item-hint");
+    if (!input || !hint) return;
+    const raw = input.value.trim();
+    if (!raw) { hint.textContent = ""; hint.classList.remove("match"); return; }
+    const match = findCatalogItem(raw);
+    if (match) {
+      hint.textContent = match.name + " · " + match.category_label;
+      hint.classList.add("match");
+    } else {
+      hint.textContent = "自定义物品ID";
+      hint.classList.remove("match");
+    }
+  }
+
+  function addMailItemRow(id, count){
+    const row = document.createElement("div");
+    row.className = "mail-item-row";
+    const itemId = document.createElement("input");
+    itemId.type = "text"; itemId.className = "mail-item-id";
+    itemId.setAttribute("list", "jade-item-catalog");
+    itemId.placeholder = "输入中文名搜索或填物品ID"; itemId.value = id || "";
+    const itemCount = document.createElement("input");
+    itemCount.type = "number"; itemCount.className = "mail-item-count";
+    itemCount.min = "1"; itemCount.step = "1"; itemCount.value = count || "1";
+    const hint = document.createElement("span");
+    hint.className = "mail-item-hint";
+    const remove = document.createElement("button");
+    remove.className = "btn-danger btn-mini"; remove.type = "button";
+    remove.textContent = "移除";
+    remove.addEventListener("click", () => row.remove());
+    itemId.addEventListener("input", () => updateItemHint(row));
+    itemId.addEventListener("change", () => updateItemHint(row));
+    row.appendChild(itemId); row.appendChild(itemCount); row.appendChild(hint);
+    row.appendChild(remove);
+    $("mailItems").appendChild(row);
+    updateItemHint(row);
+  }
+
+  function pickMailTarget(uid, username){
+    populateMailTargets();
+    $("mailTarget").value = String(uid);
+    $("mailTitle").value = "仙盟传书 · " + (username || ("UID " + uid));
+    setState($("mailState"), "已选择「" + (username || uid) + "」，请填写传书内容。", true);
+    $("mailCard").scrollIntoView({behavior: "smooth", block: "start"});
+    $("mailBody").focus();
+  }
+
+  function formatMailItems(raw){
+    try {
+      const parsed = JSON.parse(raw || "[]");
+      if (!Array.isArray(parsed) || parsed.length === 0) return "无附带物品";
+      return parsed.map((x) => (x.id || "?") + " ×" + (x.count || 0)).join("、");
+    } catch (e) { return "物品数据异常"; }
+  }
+
+  function renderMailHistory(mails){
+    const box = $("mailHistory");
+    box.replaceChildren();
+    if (!mails || mails.length === 0) {
+      const d = document.createElement("div");
+      d.className = "muted"; d.textContent = "暂无已发传书。";
+      box.appendChild(d); return;
+    }
+    for (const m of mails) {
+      const item = document.createElement("div");
+      item.className = "mail-hist-item";
+      const head = document.createElement("div");
+      head.textContent = "第 " + m.id + " 卷 · " + (m.title || "—") +
+        " · 发往 " + (m.target_name || "—");
+      const body = document.createElement("div");
+      body.textContent = m.body || "（无正文）";
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = "灵石 " + (m.spirit_stones || 0) + " · " +
+        formatMailItems(m.items_json) + " · 已领 " + (m.claim_count || 0) +
+        " 人 · " + formatTime(m.created_at) +
+        (m.expires_at ? (" · 到期 " + formatTime(m.expires_at)) : " · 永久有效");
+      const del = document.createElement("button");
+      del.className = "btn-danger btn-mini"; del.style.marginTop = "6px";
+      del.textContent = "撤回删除";
+      del.addEventListener("click", () => deleteMail(m.id));
+      item.appendChild(head); item.appendChild(body); item.appendChild(meta); item.appendChild(del);
+      box.appendChild(item);
+    }
+  }
+
+  async function refreshMailHistory(){
+    try {
+      const data = await api("/api/admin/mails");
+      renderMailHistory(data && data.mails ? data.mails : []);
+    } catch (e) {
+      if (e.status === 401) handleKeyLost(e.message);
+    }
+  }
+
+  async function sendMail(){
+    const state = $("mailState");
+    const title = $("mailTitle").value.trim();
+    if (Array.from(title).length < 1 || Array.from(title).length > 60) {
+      setState(state, "标题需为 1~60 字。", false); return;
+    }
+    const stones = Number($("mailStones").value);
+    if (!Number.isInteger(stones) || stones < 0) {
+      setState(state, "灵石需为非负整数。", false); return;
+    }
+    const days = Number($("mailExpireDays").value);
+    if (!Number.isInteger(days) || days < 0 || days > 3650) {
+      setState(state, "有效期需为 0~3650 天。", false); return;
+    }
+    const items = [];
+    for (const row of $("mailItems").querySelectorAll(".mail-item-row")) {
+      const id = row.querySelector(".mail-item-id").value.trim();
+      const count = Number(row.querySelector(".mail-item-count").value);
+      if (!id || !Number.isInteger(count) || count <= 0) {
+        setState(state, "物品编号不能为空且数量需为正整数。", false); return;
+      }
+      items.push({id: id, count: count});
+    }
+    const targetUID = Number($("mailTarget").value) || 0;
+    $("sendMailBtn").disabled = true;
+    setState(state, "正在发出传书…");
+    try {
+      await api("/api/admin/mails", {
+        method: "POST",
+        body: JSON.stringify({
+          target_uid: targetUID,
+          title: title,
+          body: $("mailBody").value.trim(),
+          spirit_stones: stones,
+          items: items,
+          expire_days: days
+        })
+      });
+      $("mailTitle").value = ""; $("mailBody").value = "";
+      $("mailStones").value = "0"; $("mailExpireDays").value = "7";
+      $("mailItems").replaceChildren();
+      setState(state, "传书已发出，等待同道领取。", true);
+      await refreshMailHistory();
+    } catch (e) {
+      setState(state, e.message, false);
+      if (e.status === 401) handleKeyLost(e.message);
+    } finally {
+      $("sendMailBtn").disabled = false;
+    }
+  }
+
+  async function deleteMail(id){
+    if (!confirm("确认撤回第 " + id + " 卷传书？所有未领取记录将一并清除。")) return;
+    try {
+      await api("/api/admin/mails/delete", {
+        method: "POST", body: JSON.stringify({id: id})
+      });
+      await refreshMailHistory();
+    } catch (e) {
+      alert(e.message);
+      if (e.status === 401) handleKeyLost(e.message);
+    }
+  }
+
+  $("verifyBtn").addEventListener("click", verifyKey);
+  $("adminKey").addEventListener("keydown", (e) => { if (e.key === "Enter") verifyKey(); });
+  $("keyStrip").addEventListener("click", expandKey);
+  $("clearBtn").addEventListener("click", () => {
+    adminKey = "";
+    sessionStorage.removeItem(KEY_STORE);
+    $("adminKey").value = "";
+    expandKey();
+    $("overviewCard").style.display = "none";
+    setState($("keyState"), "已清除密钥。", true);
+    allUsers = [];
+    $("userRows").replaceChildren();
+    populateMailTargets();
+    $("mailItems").replaceChildren();
+    $("mailHistory").replaceChildren();
+    setState($("mailState"), "请先验证掌教密钥。", false);
+    setState($("listState"), "请先验证掌教密钥。", false);
+  });
+  $("createBtn").addEventListener("click", createUser);
+  $("copyBtn").addEventListener("click", copyCreated);
+  $("refreshBtn").addEventListener("click", refreshUsers);
+  $("publishBtn").addEventListener("click", publishPatch);
+  $("userSearch").addEventListener("input", applyUserView);
+  $("userSort").addEventListener("change", applyUserView);
+  $("refreshMailBtn").addEventListener("click", refreshMailHistory);
+  $("addMailItemBtn").addEventListener("click", () => addMailItemRow("", "1"));
+  $("sendMailBtn").addEventListener("click", sendMail);
+  initItemCatalog();
+  populateMailTargets();
+  addMailItemRow("", "1");
+
+  if (adminKey) {
+    $("adminKey").value = adminKey;
+    verifyKey();
+  }
+})();
+</script>
+</body>
+</html>
