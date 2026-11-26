@@ -38,6 +38,10 @@ server/patches/*.pck
 *.pem
 *.log
 
+# Local project notes, reports and rules
+docs/
+AGENTS.md
+
 # Local test fixtures and reports
 docs/test_save_*.json
 *_suite.out
