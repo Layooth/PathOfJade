@@ -488,21 +488,36 @@ func _present(play_sound: bool = true) -> void:
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	move_to_front()
+	# 测量阶段保持透明：玩家看不到锁宽与定高过程，避免首帧高度跳变
+	_panel.modulate = Color(1, 1, 1, 0)
 	_scrim.modulate.a = 0.0
-	# 折叠屏 / 平板 / PC：浮层内容最大 560，两侧对称留白
 	var vp := get_viewport_rect().size
 	var extra_side := maxf(0.0, (vp.x - 560.0) * 0.5)
+	var sheet_width := maxf(160.0, vp.x - extra_side * 2.0)
+	var inner_width := maxf(120.0, sheet_width - 32.0)
 	_panel.offset_left = extra_side
 	_panel.offset_right = -extra_side
+	# 显式锁定目标宽度，autowrap 文本才能按真实宽度在首帧就正确折行
+	_panel.custom_minimum_size.x = sheet_width
+	_panel.size.x = sheet_width
+	if _panel_box != null:
+		_panel_box.custom_minimum_size.x = inner_width
+	if _scroll != null:
+		_scroll.custom_minimum_size.x = inner_width
+		_scroll.custom_minimum_size.y = 0.0
+		_scroll.reset_size()
+	if _body != null:
+		_body.custom_minimum_size.x = inner_width
+		_body.reset_size()
+	_panel.custom_minimum_size.y = 0.0
+	_panel.reset_size()
 	var tree := get_tree()
 	if tree == null:
 		return
-	# 新内容刚挂树，先等布局帧算准自动换行文本的实际高度
+	# 第一帧完成容器水平宽度分发；第二帧完成 autowrap 文本在真实宽度下的重排
 	await tree.process_frame
 	if token != _present_token or not is_inside_tree():
 		return
-	_scroll.custom_minimum_size.y = 0.0
-	_scroll.reset_size()
 	await tree.process_frame
 	if token != _present_token or not is_inside_tree():
 		return
@@ -523,9 +538,20 @@ func _present(play_sound: bool = true) -> void:
 	# 内容未超出上限时精确贴合，只有超高内容才留下滚动空间
 	_scroll.custom_minimum_size.y = minf(content_height, max_body_height)
 	_panel.custom_minimum_size.y = target_height
-	await tree.process_frame
-	if token != _present_token or not is_inside_tree():
-		return
+	# 自定义行可能在定高后的首帧才完成最终排布，动画前再复核一次，杜绝底部空白
+	for _i in range(2):
+		await tree.process_frame
+		if token != _present_token or not is_inside_tree():
+			return
+		var remeasured := maxf(_body.get_combined_minimum_size().y, _body.size.y)
+		if absf(remeasured - content_height) <= 2.0:
+			break
+		content_height = remeasured
+		target_height = clampf(head_height + content_height + chrome_height,
+			MIN_SHEET_HEIGHT, max_height)
+		max_body_height = maxf(40.0, target_height - head_height - chrome_height)
+		_scroll.custom_minimum_size.y = minf(content_height, max_body_height)
+		_panel.custom_minimum_size.y = target_height
 	_panel_height = _panel.get_combined_minimum_size().y
 	_panel.offset_top = 0.0
 	_panel.offset_bottom = 0.0

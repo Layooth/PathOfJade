@@ -110,14 +110,14 @@ func _build() -> void:
 
 	var refresh_row := ThemeBuilder.hbox(6)
 	head.add_child(refresh_row)
-	_free_button = ThemeBuilder.small_button("免费刷新（就绪）")
+	_free_button = ThemeBuilder.small_button("免费刷新")
 	_free_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ThemeBuilder.apply_font_size(_free_button, 13)
+	ThemeBuilder.apply_font_size(_free_button, ThemeBuilder.FONT_BODY)
 	_free_button.pressed.connect(func() -> void: BountyManager.free_refresh_all())
 	refresh_row.add_child(_free_button)
-	_paid_button = ThemeBuilder.small_button("灵石加急刷新")
+	_paid_button = ThemeBuilder.small_button("灵石刷新")
 	_paid_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ThemeBuilder.apply_font_size(_paid_button, 13)
+	ThemeBuilder.apply_font_size(_paid_button, ThemeBuilder.FONT_BODY)
 	_paid_button.pressed.connect(func() -> void: BountyManager.paid_refresh_all())
 	refresh_row.add_child(_paid_button)
 
@@ -193,10 +193,17 @@ func rebuild() -> void:
 		BountyManager.daily_count(), BountyManager.DAILY_BOUNTY_LIMIT,
 		GameFormulas.format_num(float(GameState.bounties_done))]
 	var remain := BountyManager.free_refresh_remaining()
-	_free_button.text = "免费刷新（就绪）" if remain <= 0.0 \
-		else "免费刷新（%s）" % GameFormulas.format_duration(remain)
-	_free_button.disabled = remain > 0.0
-	_paid_button.text = "灵石加急 %d" % BountyManager.paid_refresh_cost()
+	var daily_full := BountyManager.daily_limit_reached()
+	_free_button.text = "免费刷新" if remain <= 0.0 \
+		else "免费刷新 %s" % _cooldown_text(remain)
+	_free_button.disabled = daily_full or remain > 0.0
+	_paid_button.text = "灵石刷新 %d" % BountyManager.paid_refresh_cost()
+	_paid_button.disabled = daily_full
+	if _free_button.disabled:
+		ThemeBuilder.apply_secondary_button(_free_button)
+	else:
+		ThemeBuilder.apply_primary_button(_free_button)
+	ThemeBuilder.apply_secondary_button(_paid_button)
 	for child in _grid.get_children():
 		_grid.remove_child(child)
 		child.queue_free()
@@ -262,14 +269,13 @@ func _build_card(index: int, bounty: Dictionary) -> PanelContainer:
 
 	var submit_text := "交付领奖"
 	if BountyManager.daily_limit_reached():
-		submit_text = "今日赏格已尽 (%d/%d)" % [
-			BountyManager.DAILY_BOUNTY_LIMIT, BountyManager.DAILY_BOUNTY_LIMIT]
+		submit_text = "今日已满额"
 	elif not can_submit:
 		submit_text = "进度不足"
 	var submit := ThemeBuilder.small_button(submit_text)
 	submit.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
 	submit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ThemeBuilder.apply_font_size(submit, ThemeBuilder.FONT_CARD_TITLE)
+	ThemeBuilder.apply_font_size(submit, ThemeBuilder.FONT_BODY)
 	submit.disabled = not can_submit
 	if can_submit:
 		ThemeBuilder.apply_primary_button(submit)
@@ -339,12 +345,18 @@ func _on_submit_pressed(index: int, anchor: Control) -> void:
 		UiMotion.pulse(_points_label, 1.12, 0.22)
 
 
+## 免费刷新冷却文案：mm:ss，长时间也保持两位分钟，避免按钮宽度跳动
+func _cooldown_text(seconds: float) -> String:
+	var total := maxi(0, int(ceil(seconds)))
+	return "%02d:%02d" % [total / 60, total % 60]
+
+
 func _show_help() -> void:
 	BottomSheet.show_help("仙盟悬赏 · 规则", [
 		{"text": "悬赏令", "desc": "常驻 3 个悬赏：采集物资、制造物资与妖兽清剿各占其一，交付后领取灵石、仙盟贡献与技能经验。"},
 		{"text": "今日赏格", "desc": "每个自然日最多交付 10 单；跨天后自动归零，累计完成数不受影响。"},
 		{"text": "仙盟急令", "desc": "制造类委托有几率成为急令，灵石奖励 ×1.4、贡献 +30，并以鎏金徽章标出。"},
-		{"text": "免费刷新", "desc": "每 30 分钟可免费刷新全部悬赏；也可消耗灵石加急刷新。"},
+		{"text": "免费刷新", "desc": "每 30 分钟可免费刷新全部悬赏；也可消耗灵石刷新。"},
 		{"text": "仙盟贡献", "desc": "完成悬赏积累贡献，可在藏经阁兑换功法与参悟升级。"},
 	])
 

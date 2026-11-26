@@ -20,7 +20,7 @@ exports/
 # Server runtime data, databases, and compiled binaries
 server/data/
 data_*/
-*.db
+*.db*
 *.db-wal
 *.db-shm
 *.sqlite
@@ -42,6 +42,7 @@ server/patches/*.pck
 docs/test_save_*.json
 *_suite.out
 *_suite.err
+*_probe*
 *_probe.gd
 *_probe*.gd.uid
 

@@ -5,6 +5,8 @@ extends RefCounted
 
 const MAX_SKILL_LEVEL: int = 150
 const MAX_MASTERY_LEVEL: int = 150
+## 兵刃 / 法袍祭炼共同硬上限；旧档超出部分保留收益，但不再允许继续提升
+const MAX_TEMPER_LEVEL: int = 50
 
 # ---------------------------------------------------------------- 长线曲线集中调参
 ## 技能：单次获取倍率 / 曲线纵向放大 / 指数分母（越小后期越陡）

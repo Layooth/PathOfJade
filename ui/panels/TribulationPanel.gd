@@ -21,6 +21,7 @@ var _timeline_label: Label
 var _countdown_label: Label
 var _state_label: Label
 var _result_label: Label
+var _ward_hint_label: Label
 var _pips_row: HBoxContainer
 var _pips: Array[PanelContainer] = []
 var _log_box: VBoxContainer
@@ -154,6 +155,14 @@ func _build() -> void:
 		ThemeBuilder.HP_GHOST_COLOR, 14.0)
 	monitor_box.add_child(_hp_bar)
 
+	_ward_hint_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_CAPTION,
+		ThemeBuilder.COLOR_AMBER)
+	_ward_hint_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ward_hint_label.custom_minimum_size = Vector2(0, 0)
+	_ward_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ThemeBuilder.apply_font_size(_ward_hint_label, ThemeBuilder.FONT_CAPTION)
+	monitor_box.add_child(_ward_hint_label)
+
 	_start_button = ThemeBuilder.button("引动天劫", true)
 	_start_button.pressed.connect(_on_start_pressed)
 	monitor_box.add_child(_start_button)
@@ -260,7 +269,31 @@ func refresh_requirements() -> void:
 	_dao_heart_label.text = "道心悟性 %d 层 · 天雷 -%d%%" % [stacks, stacks * 10]
 	_timeline_label.text = "天劫进度（%d 秒 · 每 4 秒一雷）" % int(duration)
 	_rebuild_pips(damages.size())
+	_update_ward_hint(damages)
 	_refresh_button_state()
+
+
+## 无减伤总雷伤接近或超过当前气血池时，温和提示护符 / 护具，不阻断尝试
+func _update_ward_hint(damages: Array) -> void:
+	if _ward_hint_label == null:
+		return
+	var realm := GameState.get_realm()
+	if realm == null or not realm.requires_tribulation or damages.is_empty():
+		_ward_hint_label.text = ""
+		_ward_hint_label.visible = false
+		return
+	var defense := float(GameState.get_defense())
+	var total := 0.0
+	for value in damages:
+		total += maxf(1.0, roundf(float(value) - defense * 0.8))
+	var max_hp := float(maxi(1, GameState.get_max_hp()))
+	if total >= max_hp * 0.85:
+		_ward_hint_label.text = "此劫雷威甚重（无护持约 %s 点），建议备妥护身符箓或更高阶护具后再行引动" % [
+			GameFormulas.format_num(total)]
+		_ward_hint_label.visible = true
+	else:
+		_ward_hint_label.text = ""
+		_ward_hint_label.visible = false
 
 
 func _rebuild_pips(count: int) -> void:

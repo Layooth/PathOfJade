@@ -141,8 +141,11 @@ func _build_overview_card() -> void:
 	name_label.clip_text = true
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_row.add_child(name_label)
-	if FiveElementsSystem.is_ascended():
-		name_row.add_child(ThemeBuilder.chip("真仙", ThemeBuilder.COLOR_TEXT_GOLD))
+	var help := ThemeBuilder.create_help_button(Callable(self, "_show_help"))
+	help.custom_minimum_size = Vector2(44, 44)
+	help.size_flags_horizontal = Control.SIZE_SHRINK_END
+	help.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_row.add_child(help)
 
 	var badge_flow := HFlowContainer.new()
 	badge_flow.add_theme_constant_override("h_separation", 6)
@@ -161,10 +164,6 @@ func _build_overview_card() -> void:
 	play_label.clip_text = true
 	play_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	info.add_child(play_label)
-
-	var help := ThemeBuilder.create_help_button(Callable(self, "_show_help"))
-	help.custom_minimum_size = Vector2(44, 44)
-	head.add_child(help)
 
 	var cultivation_row := ThemeBuilder.hbox(6)
 	box.add_child(cultivation_row)
@@ -185,12 +184,22 @@ func _build_overview_card() -> void:
 	status_row.add_child(ThemeBuilder.label(_dao_heart_text(), ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_JADE))
 	status_row.add_child(ThemeBuilder.expander())
-	var trib_button := ThemeBuilder.small_button("前往渡劫")
-	var trib_ready := GameState.is_cultivation_locked() and GameState.get_realm_requirement() > 0.0
-	if trib_ready:
-		ThemeBuilder.apply_primary_button(trib_button)
+	var maxed_realm := GameState.get_realm_index() >= DataRegistry.realm_order.size() - 1
+	var has_next_tribulation := GameState.get_realm_requirement() > 0.0 and not maxed_realm
+	var trib_text := "前往渡劫" if has_next_tribulation else "已证大道"
+	var trib_button := ThemeBuilder.small_button(trib_text)
+	var trib_ready := GameState.is_cultivation_locked() and has_next_tribulation
+	if has_next_tribulation:
+		if trib_ready:
+			ThemeBuilder.apply_primary_button(trib_button)
+		else:
+			ThemeBuilder.apply_secondary_button(trib_button)
 	else:
 		ThemeBuilder.apply_secondary_button(trib_button)
+	trib_button.disabled = not has_next_tribulation
+	trib_button.tooltip_text = "" if has_next_tribulation else "大道圆满，暂无下一重天劫"
+	ThemeBuilder.apply_font_size(trib_button, ThemeBuilder.FONT_CAPTION)
+	trib_button.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
 	trib_button.pressed.connect(Callable(self, "_open_page").bind("tribulation"))
 	status_row.add_child(trib_button)
 
@@ -230,15 +239,15 @@ func _build_attribute_card() -> void:
 	var tower_text := "未登塔" if tower_floor <= 0 else "%d 层" % tower_floor
 
 	_add_stat_cell(grid, "气血", _hp_text(current_hp, max_hp))
-	_add_stat_cell(grid, "攻击力", GameFormulas.format_num(float(stats.get("attack", 0))))
-	_add_stat_cell(grid, "防御力", GameFormulas.format_num(float(stats.get("defense", 0))))
+	_add_stat_cell(grid, "攻击力", _compact_amount(float(stats.get("attack", 0))))
+	_add_stat_cell(grid, "防御力", _compact_amount(float(stats.get("defense", 0))))
 	_add_stat_cell(grid, "命中率", _rate_text(raw_accuracy))
 	_add_stat_cell(grid, "闪避率", _rate_text(dodge))
 	_add_stat_cell(grid, "会心率", _rate_text(crit))
 	_add_stat_cell(grid, "攻击间隔", "%.2f 秒" % interval)
-	_add_stat_cell(grid, "灵石持有", GameFormulas.format_num(float(
+	_add_stat_cell(grid, "灵石持有", _compact_amount(float(
 		GameState.get_item_count(DataRegistry.SPIRIT_STONE))))
-	_add_stat_cell(grid, "仙盟贡献", GameFormulas.format_num(float(GameState.alliance_points)))
+	_add_stat_cell(grid, "仙盟贡献", _compact_amount(float(GameState.alliance_points)))
 	_add_stat_cell(grid, "镇魔塔", tower_text)
 
 
@@ -252,24 +261,48 @@ func _add_stat_cell(grid: GridContainer, title: String, value: String) -> void:
 	cell.add_child(row)
 	var title_label := ThemeBuilder.label(title, ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_SECONDARY)
+	ThemeBuilder.apply_font_size(title_label, ThemeBuilder.FONT_CAPTION)
+	title_label.custom_minimum_size = Vector2(56, 0)
+	title_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	row.add_child(title_label)
-	row.add_child(ThemeBuilder.expander())
 	var value_label := ThemeBuilder.label(value, ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_JADE)
 	ThemeBuilder.apply_font_size(value_label, ThemeBuilder.FONT_CAPTION)
+	value_label.custom_minimum_size = Vector2(0, 0)
 	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	value_label.clip_text = true
-	value_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	value_label.clip_text = false
+	value_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	row.add_child(value_label)
 
 
-## 高气血用万位整数简写，避免 2 列属性格被长小数撑出省略号
+## 属性大数统一保留量级单位，避免窄胶囊把「万 / 亿」裁掉
+func _compact_amount(value: float) -> String:
+	var abs_value := absf(value)
+	if abs_value >= 100000000.0:
+		return _amount_with_unit(value / 100000000.0, "亿")
+	if abs_value >= 10000.0:
+		return _amount_with_unit(value / 10000.0, "万")
+	return GameFormulas.format_num(value)
+
+
+func _amount_with_unit(value: float, unit: String) -> String:
+	var text := "%.1f" % value
+	if text.ends_with(".0"):
+		text = text.substr(0, text.length() - 2)
+	return text + unit
+
+
+## 高气血用万位简写，避免 2 列属性格被长小数撑出省略号
 func _hp_text(current_hp: int, max_hp: int) -> String:
 	if max_hp >= 100000:
 		return "%d万/%d万" % [
 			int(round(float(current_hp) / 10000.0)),
 			int(round(float(max_hp) / 10000.0))]
+	if max_hp >= 10000:
+		return "%s/%s" % [
+			_amount_with_unit(float(current_hp) / 10000.0, "万"),
+			_amount_with_unit(float(max_hp) / 10000.0, "万")]
 	return "%s/%s" % [
 		GameFormulas.format_num(float(current_hp)),
 		GameFormulas.format_num(float(max_hp))]
@@ -337,8 +370,12 @@ func _build_equipment_slot(slot: String, slot_name: String, empty_text: String,
 		accent = _quality_color(quality)
 		name_text = item.display_name
 		detail_text = GameState.get_quality_name(quality)
-		if temper_level > 0:
-			detail_text += " · 祭炼 %d 重" % temper_level
+		if temper_level >= GameState.MAX_TEMPER_LEVEL:
+			detail_text += " · 祭炼 %d / %d 重 · 已圆满" % [
+				temper_level, GameState.MAX_TEMPER_LEVEL]
+		elif temper_level > 0:
+			detail_text += " · 祭炼 %d / %d 重" % [
+				temper_level, GameState.MAX_TEMPER_LEVEL]
 		card.tooltip_text = item.get_stat_summary()
 	else:
 		texture = IconLibrary.get_ui_icon(empty_icon)
@@ -517,9 +554,15 @@ func _open_equipment_sheet(slot: String) -> void:
 	var quality := clampi(int(equipped.get("quality", 0)), 0, 2)
 	var temper_level := GameState.get_temper_level(slot)
 	var title_color := _quality_color(quality)
+	var temper_label := "尚未祭炼"
+	if temper_level >= GameState.MAX_TEMPER_LEVEL:
+		temper_label = "祭炼 %d / %d 重 · 已圆满" % [
+			temper_level, GameState.MAX_TEMPER_LEVEL]
+	elif temper_level > 0:
+		temper_label = "祭炼 %d / %d 重" % [temper_level, GameState.MAX_TEMPER_LEVEL]
 	var tags: Array = [
 		{"text": GameState.get_quality_name(quality), "color": title_color},
-		{"text": "祭炼 %d 重" % temper_level if temper_level > 0 else "尚未祭炼",
+		{"text": temper_label,
 			"color": ThemeBuilder.COLOR_TEXT_GOLD if temper_level > 0
 				else ThemeBuilder.COLOR_TEXT_SECONDARY},
 	]
@@ -539,16 +582,27 @@ func _equipment_action_row(slot: String) -> Control:
 	var row := ThemeBuilder.hbox(8)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
-	var can_temper := GameState.can_temper_equipment()
-	var temper_button := ThemeBuilder.small_button("祭炼" if can_temper else "需筑基中期")
+	var temper_full := GameState.get_temper_level(slot) >= GameState.MAX_TEMPER_LEVEL
+	var can_temper := GameState.can_temper_slot(slot)
+	var temper_text := "祭炼已圆满" if temper_full else (
+		"祭炼" if can_temper else "需筑基中期")
+	var temper_button := ThemeBuilder.small_button(temper_text)
 	temper_button.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
 	temper_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	temper_button.disabled = not can_temper
-	temper_button.tooltip_text = "" if can_temper else "筑基中期开启祭炼"
+	if temper_full:
+		temper_button.tooltip_text = "已臻极境，无需再耗灵石与灵材"
+	elif not can_temper:
+		temper_button.tooltip_text = "筑基中期开启祭炼"
+	else:
+		temper_button.tooltip_text = "需 %d 阶及以上灵材/丹药" % [
+			GameState.get_temper_material_min_tier(slot)]
 	ThemeBuilder.apply_font_size(temper_button, ThemeBuilder.FONT_CAPTION)
 	ThemeBuilder.tighten_button_padding(temper_button, 6.0)
 	if can_temper:
 		ThemeBuilder.apply_primary_button(temper_button)
+	else:
+		ThemeBuilder.apply_secondary_button(temper_button)
 	temper_button.pressed.connect(func() -> void: _do_temper(slot))
 	row.add_child(temper_button)
 
@@ -622,9 +676,17 @@ func _do_temper(slot: String) -> void:
 	if not GameState.can_temper_equipment():
 		EventBus.toast.emit("需筑基中期")
 		return
+	if GameState.get_temper_level(slot) >= GameState.MAX_TEMPER_LEVEL:
+		EventBus.toast.emit("已至祭炼圆满之境")
+		return
 	var result := GameState.temper_equipment(slot, 1)
 	if not bool(result.get("ok", false)):
-		EventBus.toast.emit("祭炼未成：灵石或 3 阶以上灵材不足")
+		var reason := String(result.get("reason", ""))
+		if reason == "已至祭炼圆满之境":
+			EventBus.toast.emit(reason)
+		else:
+			EventBus.toast.emit("祭炼未成：灵石或 %d 阶以上灵材不足" % [
+				GameState.get_temper_material_min_tier(slot)])
 		return
 	_queue_refresh()
 	EventBus.toast.emit("祭炼至 %d 重（+%d 重）：消耗 灵石 %s、%s ×%d" % [

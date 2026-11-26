@@ -178,9 +178,13 @@ func _build() -> void:
 	_floor_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	left.add_child(_floor_label)
 	# 首通节点神赐预告：下一重奖内容一目了然
-	_next_reward_label = ThemeBuilder.label("", ThemeBuilder.FONT_CAPTION,
+	_next_reward_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_JADE)
+	ThemeBuilder.apply_font_size(_next_reward_label, ThemeBuilder.FONT_CAPTION)
 	_next_reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_next_reward_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_next_reward_label.custom_minimum_size = Vector2(0, 0)
+	_next_reward_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	left.add_child(_next_reward_label)
 
 	_stage = CombatStage.new()
@@ -243,6 +247,9 @@ func _build() -> void:
 	info_box.add_child(ThemeBuilder.section_title_label("首通奖励",
 		ThemeBuilder.FONT_CAPTION))
 	_reward_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_BODY_SUB)
+	ThemeBuilder.apply_font_size(_reward_label, ThemeBuilder.FONT_BODY_SUB)
+	_reward_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_reward_label.custom_minimum_size = Vector2(0, 0)
 	info_box.add_child(_reward_label)
 	info_box.add_child(ThemeBuilder.separator(1, ThemeBuilder.COLOR_BORDER))
 	info_box.add_child(ThemeBuilder.section_title_label("消耗品",
@@ -305,10 +312,10 @@ func _ring_first_clear(floor_num: int) -> void:
 		return
 	# 连闯智能节流：普通层首通合并为顶部轻气泡（防每秒刷屏），
 	# 仅 5 层妖王里程碑 / 手动单层挑战才弹居中大横幅
-	var mult := 2 if floor_num % 5 == 0 else 1
 	var auto_running := GameState.is_flag("tower_auto", true) and CombatEngine.is_active()
 	if auto_running and floor_num % 5 != 0:
-		_auto_run_stones += 50 * floor_num * mult
+		_auto_run_stones += int(GameState.get_tower_first_clear_reward(floor_num).get(
+			"stones", 0))
 		EventBus.toast.emit("连闯首通已至第 %d 层（累计灵石 +%s）" % [floor_num,
 			GameFormulas.format_num(float(_auto_run_stones))])
 		return
@@ -380,9 +387,22 @@ func _on_auto_toggled(pressed: bool) -> void:
 ## 下一重奖预告文案：每 5 层节点，偶数赐奇珍 / 奇数赐仙盟礼
 func _next_reward_text() -> String:
 	var next_node := ((GameState.tower_highest_floor / 5) + 1) * 5
-	var reward_name := "百年朱果 ×1 + 聚灵甘露 ×2" if next_node % 10 == 0 \
-		else "仙盟贡献 + 高阶灵材礼匣"
-	return "下一重奖：第 %d 层 · %s" % [next_node, reward_name]
+	var reward: Dictionary = DataRegistry.get_tower_milestone_reward(next_node)
+	if reward.is_empty():
+		return ""
+	var parts: Array[String] = []
+	for value in reward.get("items", []):
+		var entry: Dictionary = value
+		var item_id := String(entry.get("id", ""))
+		if item_id == "":
+			continue
+		parts.append("%s ×%d" % [DataRegistry.get_item_name(item_id),
+			int(entry.get("amount", 1))])
+	var item_text := "、".join(parts)
+	if parts.size() > 3:
+		item_text = "、".join(parts.slice(0, 3)) + " 等"
+	return "下一重奖：第 %d 层 · %s · 贡献 +%d" % [next_node, item_text,
+		int(reward.get("points", 0))]
 
 
 func _show_help() -> void:
@@ -458,12 +478,13 @@ func refresh() -> void:
 		if not running:
 			# 未开战时，舞台右侧预览当前选中层数的镇塔妖魔
 			_stage.show_preview_enemy(enemy)
-	var multiplier := 2 if _floor % 5 == 0 else 1
+	var reward: Dictionary = GameState.get_tower_first_clear_reward(_floor)
 	var first_clear := not GameState.is_tower_floor_claimed(_floor)
-	_reward_label.text = "灵石 %s · 贡献 %d%s%s" % [
-		GameFormulas.format_num(float(50 * _floor * multiplier)),
-		(10 + _floor) * multiplier,
-		"（妖王层 ×2）" if multiplier == 2 else "",
+	_reward_label.text = "灵石 %s · 贡献 %d · 层段 %d%s%s" % [
+		GameFormulas.format_num(float(int(reward.get("stones", 0)))),
+		int(reward.get("points", 0)),
+		int(reward.get("tier", 1)),
+		"（妖王层 ×2）" if bool(reward.get("king", false)) else "",
 		"" if first_clear else " · 已领取"]
 	_refresh_potion_capsules()
 	_refresh_live()

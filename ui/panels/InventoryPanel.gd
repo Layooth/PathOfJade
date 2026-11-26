@@ -33,6 +33,8 @@ var _action_row: BoxContainer
 var _detail_panel: PanelContainer
 var _detail_box: VBoxContainer
 var _selected_item_id: String = ""
+## -1 表示非品质化物品；0/1/2 对应凡品/精良/极品，仅用于 UI 选中态
+var _selected_quality: int = -1
 var _grid_buttons: Dictionary = {}
 var _layout_mode: int = EventBus.LayoutMode.COMPACT
 var _rebuild_queued: bool = false
@@ -287,37 +289,30 @@ func rebuild() -> void:
 	_clear(_list_box)
 	_grid_buttons.clear()
 
-	var total_stacks := 0
-	var items: Array = []
+	var entries: Array = []
 	for key in DataRegistry.items.keys():
 		var item := DataRegistry.get_item(String(key))
-		if item == null:
+		if item == null or not _match_filter(item):
 			continue
-		if GameState.get_item_count(item.id) <= 0:
-			continue
-		if not _match_filter(item):
-			continue
-		items.append(item)
-		total_stacks += 1
-	items.sort_custom(func(a: ItemData, b: ItemData) -> bool:
-		if a.category != b.category:
-			return a.category < b.category
-		# 材料按品阶从高到低（同阶来源等级降序）：常用高阶灵材置顶，旧凡材沉底
-		var ga: Dictionary = DataRegistry.get_material_grade(a.id)
-		var gb: Dictionary = DataRegistry.get_material_grade(b.id)
-		if not ga.is_empty() and not gb.is_empty():
-			if int(ga["tier"]) != int(gb["tier"]):
-				return int(ga["tier"]) > int(gb["tier"])
-			if int(ga["unlock_level"]) != int(gb["unlock_level"]):
-				return int(ga["unlock_level"]) > int(gb["unlock_level"])
-		return a.id < b.id
-	)
+		if item.category == ItemData.Category.EQUIPMENT:
+			for quality in [2, 1, 0]:
+				var q := int(quality)
+				var q_count := GameState.get_quality_count(item.id, q)
+				if q_count > 0:
+					entries.append({"item": item, "quality": q, "count": q_count})
+		else:
+			var stack_count := GameState.get_item_count(item.id)
+			if stack_count > 0:
+				entries.append({"item": item, "quality": -1, "count": stack_count})
+	var total_stacks := entries.size()
+	entries.sort_custom(_entry_less)
 	_count_label.text = "共 %d 种" % total_stacks
 	_refresh_action_row()
 	_apply_width(EventBus.workspace_width)
 
-	if items.is_empty():
+	if entries.is_empty():
 		_selected_item_id = ""
+		_selected_quality = -1
 		if _list_scroll != null:
 			_list_scroll.visible = false
 		if _empty_state != null:
@@ -330,17 +325,24 @@ func rebuild() -> void:
 	if _empty_state != null:
 		_empty_state.visible = false
 
+	var selected_key := _cell_key(_selected_item_id, _selected_quality)
 	var has_selected := false
-	for item in items:
-		if (item as ItemData).id == _selected_item_id:
+	for entry in entries:
+		if _cell_key(String((entry as Dictionary)["item"].id),
+				int((entry as Dictionary)["quality"])) == selected_key:
 			has_selected = true
 			break
 	if not has_selected:
-		_selected_item_id = (items[0] as ItemData).id
-	for item in items:
-		var button := _build_item_cell(item as ItemData)
+		var first: Dictionary = entries[0]
+		_selected_item_id = String((first["item"] as ItemData).id)
+		_selected_quality = int(first["quality"])
+	for entry_value in entries:
+		var entry: Dictionary = entry_value
+		var entry_item: ItemData = entry["item"] as ItemData
+		var entry_quality := int(entry["quality"])
+		var button := _build_item_cell(entry_item, entry_quality, int(entry["count"]))
 		_list_box.add_child(button)
-		_grid_buttons[(item as ItemData).id] = button
+		_grid_buttons[_cell_key(entry_item.id, entry_quality)] = button
 	_refresh_grid_selection()
 	# 详情卡与网格刷新合并到帧末执行：同一帧多次状态变化只重建一次详情卡
 	_queue_detail_refresh()
@@ -350,6 +352,27 @@ func rebuild() -> void:
 
 	# 动态重建后补挂触控约定（按钮 PASS + 14px 滑动守卫）
 	ThemeBuilder.prepare_touch(_list_box)
+func _cell_key(item_id: String, quality: int) -> String:
+	return item_id if quality < 0 else "%s|q%d" % [item_id, quality]
+
+
+func _entry_less(a: Dictionary, b: Dictionary) -> bool:
+	var ia: ItemData = a["item"] as ItemData
+	var ib: ItemData = b["item"] as ItemData
+	if ia.category != ib.category:
+		return ia.category < ib.category
+	var ga: Dictionary = DataRegistry.get_material_grade(ia.id)
+	var gb: Dictionary = DataRegistry.get_material_grade(ib.id)
+	if not ga.is_empty() and not gb.is_empty():
+		if int(ga["tier"]) != int(gb["tier"]):
+			return int(ga["tier"]) > int(gb["tier"])
+		if int(ga["unlock_level"]) != int(gb["unlock_level"]):
+			return int(ga["unlock_level"]) > int(gb["unlock_level"])
+	if ia.id == ib.id:
+		return int(a["quality"]) > int(b["quality"])
+	return ia.id < ib.id
+
+
 func _match_filter(item: ItemData) -> bool:
 	match _filter:
 		"material":
@@ -362,26 +385,28 @@ func _match_filter(item: ItemData) -> bool:
 			return true
 
 
-func _build_item_cell(item: ItemData) -> Button:
+func _build_item_cell(item: ItemData, quality: int = -1, stack_count: int = -1) -> Button:
 	var button := Button.new()
 	button.custom_minimum_size = Vector2(76, 76)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.focus_mode = Control.FOCUS_NONE
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	button.tooltip_text = "%s ×%s" % [item.display_name,
-		GameFormulas.format_num(float(GameState.get_item_count(item.id)))]
-	_apply_cell_style(button, item.id == _selected_item_id)
+	var count := stack_count if stack_count >= 0 else GameState.get_item_count(item.id)
+	var quality_suffix := "" if quality < 0 else "（%s）" % GameState.get_quality_name(quality)
+	button.tooltip_text = "%s%s ×%s" % [item.display_name, quality_suffix,
+		GameFormulas.format_num(float(count))]
+	_apply_cell_style(button, _cell_key(item.id, quality) == _cell_key(
+		_selected_item_id, _selected_quality), quality)
 
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(center)
 	var frame := IconFrame.new()
-	frame.setup(IconLibrary.get_item_icon(item.id), 56, ItemData.element_color(item.element),
-		false, 44)
+	frame.setup(IconLibrary.get_item_icon(item.id, quality), 56,
+		ItemData.element_color(item.element), false, 44)
 	center.add_child(frame)
 
-	var count := GameState.get_item_count(item.id)
 	# 数量角标加宣纸微半透底衬：不再压在图标边框线上，字号 >= FONT_CAPTION
 	var count_plate := PanelContainer.new()
 	count_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -410,31 +435,145 @@ func _build_item_cell(item: ItemData) -> Button:
 	count_plate.add_child(count_label)
 	button.add_child(count_plate)
 
-	var dot_color := ItemData.element_color(item.element)
-	if GameState.get_quality_count(item.id, 2) > 0:
-		dot_color = ThemeBuilder.COLOR_AMBER
-	elif GameState.get_quality_count(item.id, 1) > 0:
-		dot_color = ThemeBuilder.COLOR_EMERALD
-	var dot := PanelContainer.new()
-	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	dot.add_theme_stylebox_override("panel", ThemeBuilder.circle_box(dot_color, 8.0))
-	dot.anchor_left = 0.0
-	dot.anchor_right = 0.0
-	dot.anchor_top = 0.0
-	dot.anchor_bottom = 0.0
-	dot.offset_left = 7.0
-	dot.offset_right = 15.0
-	dot.offset_top = 7.0
-	dot.offset_bottom = 15.0
-	button.add_child(dot)
+	var badge := _make_quality_badge(quality) if quality >= 0 else _make_grade_badge(item.id)
+	if badge != null:
+		button.add_child(badge)
+	if _is_equipped_item(item, quality):
+		button.add_child(_make_equipped_badge())
 
-	button.pressed.connect(func() -> void: _select_item(item.id))
+	button.pressed.connect(func() -> void: _select_item(item.id, quality))
 	return button
 
 
-func _apply_cell_style(button: Button, selected: bool) -> void:
-	var bg := Color("#F0F7F4") if selected else ThemeBuilder.COLOR_CARD
-	var border := ThemeBuilder.COLOR_JADE if selected else ThemeBuilder.COLOR_BORDER
+## 左上角品阶微印：文字首字直接取 DataRegistry 品阶名，禁止另写阶位表
+func _make_grade_badge(item_id: String) -> PanelContainer:
+	var grade: Dictionary = DataRegistry.get_item_grade(item_id)
+	if grade.is_empty():
+		return null
+	var grade_name := String(grade.get("name", ""))
+	if grade_name.is_empty():
+		return null
+	var tier := clampi(int(grade.get("tier", 1)), 1, 5)
+	var ink := ThemeBuilder.get_material_grade_color(tier)
+	var panel := PanelContainer.new()
+	panel.name = "GradeSeal"
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg := Color(ink.r, ink.g, ink.b, 0.16)
+	var border := Color(ink.r, ink.g, ink.b, 0.55)
+	var box := ThemeBuilder.panel_box(bg, border, 4, 1, 0)
+	box.content_margin_left = 5
+	box.content_margin_right = 5
+	box.content_margin_top = 1
+	box.content_margin_bottom = 1
+	panel.add_theme_stylebox_override("panel", box)
+	panel.anchor_left = 0.0
+	panel.anchor_right = 0.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 0.0
+	panel.offset_left = 6.0
+	panel.offset_top = 5.0
+	panel.offset_right = 30.0
+	panel.offset_bottom = 25.0
+	var label := ThemeBuilder.label(grade_name.substr(0, 1), ThemeBuilder.FONT_CAPTION,
+		ink.darkened(0.12))
+	ThemeBuilder.apply_font_size(label, ThemeBuilder.FONT_CAPTION)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(label)
+	return panel
+
+
+func _make_equipped_badge() -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.name = "EquippedSeal"
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg := Color(ThemeBuilder.COLOR_JADE.r, ThemeBuilder.COLOR_JADE.g,
+		ThemeBuilder.COLOR_JADE.b, 0.92)
+	var box := ThemeBuilder.panel_box(bg, bg, 4, 0, 0)
+	box.content_margin_left = 5
+	box.content_margin_right = 5
+	box.content_margin_top = 1
+	box.content_margin_bottom = 1
+	panel.add_theme_stylebox_override("panel", box)
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 0.0
+	panel.offset_left = -50.0
+	panel.offset_right = -6.0
+	panel.offset_top = 5.0
+	panel.offset_bottom = 25.0
+	var label := ThemeBuilder.label("装", ThemeBuilder.FONT_CAPTION,
+		Color(0.98, 0.97, 0.92))
+	ThemeBuilder.apply_font_size(label, ThemeBuilder.FONT_CAPTION)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(label)
+	return panel
+
+
+## 左上角品质微印：极品鎏金 / 精良翠玉 / 凡品素墨
+func _make_quality_badge(quality: int) -> PanelContainer:
+	var names: Array = ["凡品", "精良", "极品"]
+	var inks: Array = [
+		ThemeBuilder.COLOR_TEXT_SECONDARY,
+		ThemeBuilder.COLOR_EMERALD,
+		ThemeBuilder.COLOR_TEXT_GOLD,
+	]
+	var q := clampi(quality, 0, 2)
+	var ink: Color = inks[q]
+	var panel := PanelContainer.new()
+	panel.name = "QualitySeal"
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg := Color(ink.r, ink.g, ink.b, 0.18)
+	var border := Color(ink.r, ink.g, ink.b, 0.6)
+	var box := ThemeBuilder.panel_box(bg, border, 4, 1, 0)
+	box.content_margin_left = 5
+	box.content_margin_right = 5
+	box.content_margin_top = 1
+	box.content_margin_bottom = 1
+	panel.add_theme_stylebox_override("panel", box)
+	panel.anchor_left = 0.0
+	panel.anchor_right = 0.0
+	panel.anchor_top = 0.0
+	panel.anchor_bottom = 0.0
+	panel.offset_left = 6.0
+	panel.offset_top = 5.0
+	panel.offset_right = 30.0
+	panel.offset_bottom = 25.0
+	var label := ThemeBuilder.label(String(names[q]).substr(0, 1),
+		ThemeBuilder.FONT_CAPTION, ink.darkened(0.12))
+	ThemeBuilder.apply_font_size(label, ThemeBuilder.FONT_CAPTION)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(label)
+	return panel
+
+
+func _is_equipped_item(item: ItemData, quality: int = -1) -> bool:
+	if not item.is_equipment():
+		return false
+	var equipped: Dictionary = GameState.get_equipped(item.equip_slot)
+	if String(equipped.get("id", "")) != item.id:
+		return false
+	return quality < 0 or int(equipped.get("quality", 0)) == quality
+
+
+func _apply_cell_style(button: Button, selected: bool, quality: int = -1) -> void:
+	var bg := ThemeBuilder.COLOR_CARD
+	var border := ThemeBuilder.COLOR_BORDER
+	if quality == 2:
+		bg = Color("#FFF7E4")
+		border = ThemeBuilder.COLOR_TEXT_GOLD
+	elif quality == 1:
+		bg = Color("#EAF6F1")
+		border = ThemeBuilder.COLOR_EMERALD
+	if selected:
+		bg = ThemeBuilder.COLOR_JADE_PAPER if quality < 0 else bg
+		border = ThemeBuilder.COLOR_JADE_DARK
 	var width := 2 if selected else 1
 	button.add_theme_stylebox_override("normal",
 		ThemeBuilder.panel_box(ThemeBuilder.card_color(bg), border, 10, width, 0))
@@ -448,15 +587,17 @@ func _apply_cell_style(button: Button, selected: bool) -> void:
 
 
 func _refresh_grid_selection() -> void:
-	for item_id in _grid_buttons.keys():
-		var button: Button = _grid_buttons[item_id]
-		_apply_cell_style(button, String(item_id) == _selected_item_id)
+	for key in _grid_buttons.keys():
+		var button: Button = _grid_buttons[key]
+		_apply_cell_style(button, String(key) == _cell_key(_selected_item_id,
+			_selected_quality))
 
 
-func _select_item(item_id: String) -> void:
+func _select_item(item_id: String, quality: int = -1) -> void:
 	if AudioManager != null:
 		AudioManager.play_tap()
 	_selected_item_id = item_id
+	_selected_quality = quality
 	_refresh_grid_selection()
 	# 宽屏常驻详情卡 / COMPACT 轻触弹 BottomSheet（释放首屏物格视野）
 	if _layout_mode == EventBus.LayoutMode.COMPACT:
@@ -506,7 +647,7 @@ func _refresh_detail() -> void:
 		return
 	_clear(_detail_box)
 	var item := DataRegistry.get_item(_selected_item_id)
-	if item == null or GameState.get_item_count(item.id) <= 0:
+	if item == null or _selected_count() <= 0:
 		# 固定高度槽位：无选中时显示占位，不再隐藏（隐藏/出现会把列表推来推去）
 		var placeholder := ThemeBuilder.label("选中物品查看详情", ThemeBuilder.FONT_BODY_SUB,
 			ThemeBuilder.COLOR_TEXT_MUTED)
@@ -515,7 +656,15 @@ func _refresh_detail() -> void:
 		_detail_box.add_child(placeholder)
 		return
 	# 可见性归 _apply_width 统一管理（COMPACT 隐藏详情卡、改走 BottomSheet）
-	_detail_box.add_child(_build_detail_nodes(item, false))
+	_detail_box.add_child(_build_detail_nodes(item, false, _selected_quality))
+
+
+func _selected_count() -> int:
+	if _selected_item_id == "":
+		return 0
+	if _selected_quality >= 0:
+		return GameState.get_quality_count(_selected_item_id, _selected_quality)
+	return GameState.get_item_count(_selected_item_id)
 
 
 ## COMPACT：轻触物格弹出三段式详情 BottomSheet（身份 + 数值 + 用途 + 操作）
@@ -525,7 +674,7 @@ func _show_item_sheet() -> void:
 		return
 	if AudioManager != null:
 		AudioManager.play_tap()
-	_show_item_detail_sheet(item)
+	_show_item_detail_sheet(item, _selected_quality)
 
 
 ## 操作后联动：弹窗内物品耗尽则自动收起
@@ -538,28 +687,32 @@ func _after_item_op(item_id: String, from_sheet: bool) -> void:
 ## 详情弹窗操作后：穿戴/整批售出等目标完成即刻收起；
 ## 单件出售/单颗使用且仍有库存时，原位刷新持有数量与按钮状态。
 func _after_sheet_action(item: ItemData, success: bool,
-		force_close: bool = false) -> void:
+		force_close: bool = false, quality: int = -2) -> void:
 	if not success:
 		return
-	if force_close or GameState.get_item_count(item.id) <= 0:
+	var q := _selected_quality if quality == -2 else quality
+	var remain := GameState.get_quality_count(item.id, q) if q >= 0 \
+		else GameState.get_item_count(item.id)
+	if force_close or remain <= 0:
 		if BottomSheet.instance != null and is_instance_valid(BottomSheet.instance):
 			BottomSheet.instance.hide_sheet()
 		return
-	_show_item_detail_sheet(item)
+	_show_item_detail_sheet(item, q)
 
 
 ## 详情内容构建（宽屏固定卡与 COMPACT BottomSheet 共用同一份 UI）
-func _build_detail_nodes(item: ItemData, from_sheet: bool) -> VBoxContainer:
+func _build_detail_nodes(item: ItemData, from_sheet: bool,
+		quality: int = -1) -> VBoxContainer:
 	var wrap := ThemeBuilder.vbox(6)
-	var count := GameState.get_item_count(item.id)
-	var fine_count := GameState.get_quality_count(item.id, 1)
-	var epic_count := GameState.get_quality_count(item.id, 2)
+	var count := GameState.get_quality_count(item.id, quality) if quality >= 0 \
+		else GameState.get_item_count(item.id)
+	var quality_name := "" if quality < 0 else GameState.get_quality_name(quality)
 
 	var row := ThemeBuilder.hbox(10)
 	wrap.add_child(row)
 	var icon_frame := IconFrame.new()
-	icon_frame.setup(IconLibrary.get_item_icon(item.id, 2 if epic_count > 0 else (
-		1 if fine_count > 0 else -1)), 68, ItemData.element_color(item.element), false, 48)
+	icon_frame.setup(IconLibrary.get_item_icon(item.id, quality), 68,
+		ItemData.element_color(item.element), false, 48)
 	row.add_child(icon_frame)
 
 	var info := ThemeBuilder.vbox(3)
@@ -572,15 +725,23 @@ func _build_detail_nodes(item: ItemData, from_sheet: bool) -> VBoxContainer:
 		int(DataRegistry.get_material_grade(item.id).get("tier", 1)) \
 			if not DataRegistry.get_material_grade(item.id).is_empty() else 0)
 	title_row.add_child(name_label)
+	if quality >= 0:
+		title_row.add_child(ThemeBuilder.chip(quality_name,
+			ThemeBuilder.COLOR_TEXT_GOLD if quality == 2 else (
+				ThemeBuilder.COLOR_EMERALD if quality == 1 else ThemeBuilder.COLOR_TEXT_SECONDARY)))
 	title_row.add_child(ThemeBuilder.chip(ItemData.element_name(item.element),
 		ItemData.element_color(item.element)))
 	title_row.add_child(ThemeBuilder.expander())
-	title_row.add_child(ThemeBuilder.label("×%s" % GameFormulas.format_num(float(count)), 15,
-		ThemeBuilder.COLOR_AMBER))
-	var stat_text := item.get_stat_summary()
+	var count_label := ThemeBuilder.label("×%s" % GameFormulas.format_num(float(count)),
+		ThemeBuilder.FONT_BODY, ThemeBuilder.COLOR_AMBER)
+	ThemeBuilder.apply_font_size(count_label, ThemeBuilder.FONT_BODY)
+	title_row.add_child(count_label)
+	var stat_text := _quality_stat_summary(item, quality)
 	if stat_text != "":
-		info.add_child(ThemeBuilder.wrap_label(stat_text, ThemeBuilder.FONT_BODY_SUB,
-			ThemeBuilder.COLOR_EMERALD))
+		var stat_label := ThemeBuilder.wrap_label(stat_text, ThemeBuilder.FONT_BODY_SUB,
+			ThemeBuilder.COLOR_EMERALD)
+		ThemeBuilder.apply_font_size(stat_label, ThemeBuilder.FONT_BODY_SUB)
+		info.add_child(stat_label)
 	if item.id == DataRegistry.SPIRIT_DEW:
 		info.add_child(ThemeBuilder.wrap_label(
 			"当前吞服可得修为 +%d" % GameState.get_spirit_dew_gain(), ThemeBuilder.FONT_CAPTION,
@@ -593,33 +754,54 @@ func _build_detail_nodes(item: ItemData, from_sheet: bool) -> VBoxContainer:
 			fruit_text += " · 已满，可出售"
 		info.add_child(ThemeBuilder.wrap_label(fruit_text, ThemeBuilder.FONT_CAPTION,
 			ThemeBuilder.COLOR_AMBER if eaten >= cap else ThemeBuilder.COLOR_JADE))
-	# 同行拆色：品阶称谓走品阶字色，「单价」辅助灰，数字主数值色
+	# 同行拆色：品质/品阶称谓走语义字色，「单价」辅助灰，数字主数值色
 	var price_row := ThemeBuilder.hbox(4)
 	var grade: Dictionary = DataRegistry.get_material_grade(item.id)
-	if not grade.is_empty():
+	if quality >= 0:
+		var quality_price := ThemeBuilder.label(quality_name,
+			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_GOLD if quality == 2 else (
+				ThemeBuilder.COLOR_EMERALD if quality == 1 else ThemeBuilder.COLOR_TEXT_SECONDARY))
+		ThemeBuilder.apply_font_size(quality_price, ThemeBuilder.FONT_CAPTION)
+		price_row.add_child(quality_price)
+	elif not grade.is_empty():
 		price_row.add_child(ThemeBuilder.label(String(grade["name"]),
 			ThemeBuilder.FONT_CAPTION,
 			ThemeBuilder.material_grade_color(int(grade["tier"]))))
 	price_row.add_child(ThemeBuilder.label("单价", ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_SECONDARY))
-	price_row.add_child(ThemeBuilder.label("%d 灵石" % item.sell_price,
-		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_PRIMARY))
+	var unit_price := _quality_sell_price(item, quality)
+	var price_label := ThemeBuilder.label("%d 灵石" % unit_price,
+		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_PRIMARY)
+	ThemeBuilder.apply_font_size(price_label, ThemeBuilder.FONT_CAPTION)
+	price_row.add_child(price_label)
 	price_row.add_child(ThemeBuilder.expander())
 	info.add_child(price_row)
 
 	var actions := ThemeBuilder.hbox(6)
 	wrap.add_child(actions)
 	if item.is_equipment():
-		var equip_button := ThemeBuilder.small_button("穿戴", true)
+		var equipped_same := _is_equipped_item(item, quality)
+		var equip_button := ThemeBuilder.small_button("卸下" if equipped_same else "穿戴")
 		custom_minimum_size_check(equip_button)
-		ThemeBuilder.apply_primary_button(equip_button)
+		equip_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ThemeBuilder.apply_font_size(equip_button, ThemeBuilder.FONT_BODY)
+		if equipped_same:
+			ThemeBuilder.apply_secondary_button(equip_button)
+		else:
+			ThemeBuilder.apply_primary_button(equip_button)
 		equip_button.pressed.connect(func() -> void:
 			if not _begin_action():
 				return
 			var center := _anchor_center(icon_frame)
-			GameState.equip_item(item.id)
-			_play_artifact_fx(center, true)
-			_after_item_op(item.id, from_sheet)
+			var ok := false
+			if equipped_same:
+				ok = GameState.unequip_slot(item.equip_slot)
+			else:
+				ok = GameState.equip_item_with_quality(item.id, quality) if quality >= 0 \
+					else GameState.equip_item(item.id)
+			if ok:
+				_play_artifact_fx(center, not equipped_same)
+			_after_item_action(item, ok, from_sheet, quality)
 		)
 		actions.add_child(equip_button)
 	if item.is_consumable():
@@ -627,6 +809,8 @@ func _build_detail_nodes(item: ItemData, from_sheet: bool) -> VBoxContainer:
 			or item.id == DataRegistry.CRIMSON_FRUIT
 		var use_button := ThemeBuilder.small_button("吞服" if is_special else "使用", true)
 		custom_minimum_size_check(use_button)
+		use_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ThemeBuilder.apply_font_size(use_button, ThemeBuilder.FONT_BODY)
 		ThemeBuilder.apply_primary_button(use_button)
 		if item.id == DataRegistry.CRIMSON_FRUIT \
 				and GameState.crimson_fruit_eaten >= GameFormulas.CRIMSON_FRUIT_CAP:
@@ -635,52 +819,81 @@ func _build_detail_nodes(item: ItemData, from_sheet: bool) -> VBoxContainer:
 		use_button.pressed.connect(func() -> void:
 			if not _begin_action():
 				return
-			GameState.use_item(item.id)
-			_after_item_op(item.id, from_sheet)
+			var ok := GameState.use_item(item.id)
+			_after_item_action(item, ok, from_sheet, quality)
 		)
 		actions.add_child(use_button)
 	if item.id != DataRegistry.SPIRIT_STONE:
 		var sell_button := ThemeBuilder.small_button("出售")
 		custom_minimum_size_check(sell_button)
+		sell_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ThemeBuilder.apply_font_size(sell_button, ThemeBuilder.FONT_BODY)
 		sell_button.pressed.connect(func() -> void:
 			if not _begin_action():
 				return
-			GameState.sell_item(item.id, 1)
-			_after_item_op(item.id, from_sheet)
+			var ok := _sell_selected(item, 1, quality)
+			_after_item_action(item, ok > 0, from_sheet, quality)
 		)
 		actions.add_child(sell_button)
 		if count > 1:
 			var sell_all := ThemeBuilder.small_button("全售")
 			custom_minimum_size_check(sell_all)
+			sell_all.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ThemeBuilder.apply_font_size(sell_all, ThemeBuilder.FONT_BODY)
 			sell_all.pressed.connect(func() -> void:
 				if not _begin_action():
 					return
-				GameState.sell_item(item.id, count)
-				_after_item_op(item.id, from_sheet)
+				var ok := _sell_selected(item, count, quality)
+				_after_item_action(item, ok > 0, from_sheet, quality)
 			)
 			actions.add_child(sell_all)
-		if fine_count > 0:
-			var sell_fine := ThemeBuilder.small_button("售精")
-			custom_minimum_size_check(sell_fine)
-			sell_fine.pressed.connect(func() -> void:
-				if not _begin_action():
-					return
-				GameState.sell_quality_item(item.id, 1, 1)
-				_after_item_op(item.id, from_sheet)
-			)
-			actions.add_child(sell_fine)
-		if epic_count > 0:
-			var sell_epic := ThemeBuilder.small_button("售极")
-			custom_minimum_size_check(sell_epic)
-			sell_epic.pressed.connect(func() -> void:
-				if not _begin_action():
-					return
-				GameState.sell_quality_item(item.id, 1, 2)
-				_after_item_op(item.id, from_sheet)
-			)
-			actions.add_child(sell_epic)
 	ThemeBuilder.prepare_touch(wrap)
 	return wrap
+
+
+func _quality_stat_summary(item: ItemData, quality: int) -> String:
+	if quality < 0:
+		return item.get_stat_summary()
+	var mult := GameState.get_quality_multiplier(quality)
+	var parts: Array[String] = []
+	if item.attack_bonus != 0:
+		parts.append("攻 %d" % int(round(float(item.attack_bonus) * mult)))
+	if item.defense_bonus != 0:
+		parts.append("防 %d" % int(round(float(item.defense_bonus) * mult)))
+	if item.max_hp_bonus != 0:
+		parts.append("气血 %d" % int(round(float(item.max_hp_bonus) * mult)))
+	if item.accuracy_bonus != 0:
+		parts.append("命中 %d" % int(round(float(item.accuracy_bonus) * mult)))
+	if item.crit_bonus != 0.0:
+		parts.append("会心 %d%%" % int(round(item.crit_bonus * mult * 100.0)))
+	if item.dodge_bonus != 0.0:
+		parts.append("闪避 %d%%" % int(round(item.dodge_bonus * mult * 100.0)))
+	return " · ".join(parts)
+
+
+func _quality_sell_price(item: ItemData, quality: int) -> int:
+	if quality == 2:
+		return item.sell_price * 3
+	if quality == 1:
+		return item.sell_price * 2
+	return item.sell_price
+
+
+func _sell_selected(item: ItemData, amount: int, quality: int) -> int:
+	if quality >= 0:
+		return GameState.sell_quality_item(item.id, amount, quality)
+	GameState.sell_item(item.id, amount)
+	return amount
+
+
+func _after_item_action(item: ItemData, success: bool, from_sheet: bool,
+		quality: int) -> void:
+	if not success:
+		return
+	if from_sheet:
+		_after_sheet_action(item, true, false, quality)
+	else:
+		_queue_rebuild()
 
 
 ## 操作按钮统一 44 高触控热区
@@ -737,58 +950,79 @@ func _show_temper_sheet(slot: String) -> void:
 		EventBus.toast.emit("需 筑基中期")
 		return
 	var level := GameState.get_temper_level(slot)
+	var full := level >= GameState.MAX_TEMPER_LEVEL
 	var stone := GameState.temper_stone_cost(slot)
 	var mat_need := GameState.temper_material_cost(slot)
-	var mat_id := GameState.find_temper_material()
+	var mat_id := GameState.find_temper_material(slot)
+	var min_tier := GameState.get_temper_material_min_tier(slot)
+	var tier_hint := "需 %d 阶及以上灵材/丹药" % min_tier
 	var slot_name := "兵刃" if slot == "weapon" else "法袍"
-	# 累计收益按实际等级计算（非单级增量）
+	var progress_text := "祭炼 %d / %d 重" % [level, GameState.MAX_TEMPER_LEVEL]
+	if full:
+		progress_text += " · 已圆满"
 	var gain_text := ""
-	var next_gain_text := ""
-	var per_level := ""
 	if slot == "weapon":
 		gain_text = "攻击 +%d · 会心 +%.2f%% · 全百艺双倍 +%.1f%%" % [
 			level * 15, minf(float(level) * 0.15, 25.0), float(level / 5) * 0.5]
-		next_gain_text = "攻击 +%d · 会心 +%.2f%% · 全百艺双倍 +%.1f%%" % [
-			(level + 1) * 15, minf(float(level + 1) * 0.15, 25.0),
-			float((level + 1) / 5) * 0.5]
-		per_level = "本重 +15 攻 / +0.15% 会心"
 	else:
 		gain_text = "气血 +%d · 防御 +%d · 全百艺耗时 -%.1f%%" % [
 			level * 180, level * 10, float(level / 5) * 0.5]
-		next_gain_text = "气血 +%d · 防御 +%d · 全百艺耗时 -%.1f%%" % [
-			(level + 1) * 180, (level + 1) * 10, float((level + 1) / 5) * 0.5]
-		per_level = "本重 +180 气血 / +10 防御"
 	var rows: Array = [{
-		"text": "当前累计（祭炼 %d 重）" % level,
+		"text": "当前累计（%s）" % progress_text,
 		"desc": "%s。" % gain_text,
 	}]
-	var next_desc := "灵石 %s" % GameFormulas.format_num(float(stone))
-	if mat_id == "":
-		next_desc = "需库存 3 阶以上灵材/丹药（当前无富余）"
+	if full:
+		rows.append({
+			"text": "祭炼已圆满",
+			"desc": "已臻极境，无需再耗灵石与灵材。",
+		})
 	else:
-		next_desc += " + %s ×%d（存 %s）" % [DataRegistry.get_item_name(mat_id), mat_need,
-			GameFormulas.format_num(float(GameState.get_item_count(mat_id)))]
-	rows.append({
-		"text": "祭炼至 %d 重累计" % (level + 1),
-		"desc": "%s（%s）。消耗：%s。" % [next_gain_text, per_level, next_desc],
-	})
+		rows.append({"text": "材料品阶", "desc": tier_hint})
+		var next_gain_text := ""
+		var per_level := ""
+		if slot == "weapon":
+			next_gain_text = "攻击 +%d · 会心 +%.2f%% · 全百艺双倍 +%.1f%%" % [
+				(level + 1) * 15, minf(float(level + 1) * 0.15, 25.0),
+				float((level + 1) / 5) * 0.5]
+			per_level = "本重 +15 攻 / +0.15% 会心"
+		else:
+			next_gain_text = "气血 +%d · 防御 +%d · 全百艺耗时 -%.1f%%" % [
+				(level + 1) * 180, (level + 1) * 10, float((level + 1) / 5) * 0.5]
+			per_level = "本重 +180 气血 / +10 防御"
+		var next_desc := "灵石 %s" % GameFormulas.format_num(float(stone))
+		if mat_id == "":
+			next_desc = "%s（当前无富余）" % tier_hint
+		else:
+			next_desc += " + %s ×%d（存 %s）" % [DataRegistry.get_item_name(mat_id), mat_need,
+				GameFormulas.format_num(float(GameState.get_item_count(mat_id)))]
+		rows.append({
+			"text": "祭炼至 %d / %d 重累计" % [level + 1, GameState.MAX_TEMPER_LEVEL],
+			"desc": "%s（%s）。消耗：%s。" % [next_gain_text, per_level, next_desc],
+		})
 	var ops := ThemeBuilder.hbox(8)
 	ops.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	var once := ThemeBuilder.button("祭炼 1 次")
+	var once := ThemeBuilder.button("祭炼已圆满" if full else "祭炼 1 次")
 	once.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
 	once.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	once.disabled = full
 	ThemeBuilder.apply_font_size(once, ThemeBuilder.FONT_BODY_SUB)
 	ThemeBuilder.apply_brush_kai(once)
-	ThemeBuilder.apply_primary_button(once)
-	once.pressed.connect(func() -> void: _do_temper(slot, 1))
+	if full:
+		ThemeBuilder.apply_secondary_button(once)
+		once.tooltip_text = "已臻极境，无需再耗灵石与灵材"
+	else:
+		ThemeBuilder.apply_primary_button(once)
+		once.pressed.connect(func() -> void: _do_temper(slot, 1))
 	ops.add_child(once)
-	var ten := ThemeBuilder.button("连炼 10 次")
+	var ten := ThemeBuilder.button("无需再炼" if full else "连炼 10 次")
 	ten.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
 	ten.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ten.disabled = full
 	ThemeBuilder.apply_font_size(ten, ThemeBuilder.FONT_BODY_SUB)
 	ThemeBuilder.apply_brush_kai(ten)
 	ThemeBuilder.apply_secondary_button(ten)
-	ten.pressed.connect(func() -> void: _do_temper(slot, 10))
+	if not full:
+		ten.pressed.connect(func() -> void: _do_temper(slot, 10))
 	ops.add_child(ten)
 	ThemeBuilder.prepare_touch(ops)
 	rows.append({"custom": ops})
@@ -803,7 +1037,12 @@ func _do_temper(slot: String, times: int) -> void:
 		BottomSheet.instance.hide_sheet()
 	var result := GameState.temper_equipment(slot, times)
 	if not bool(result.get("ok", false)):
-		EventBus.toast.emit("祭炼未成：灵石或 3 阶以上灵材不足")
+		var reason := String(result.get("reason", ""))
+		if reason == "已至祭炼圆满之境":
+			EventBus.toast.emit(reason)
+		else:
+			EventBus.toast.emit("祭炼未成：灵石或 %d 阶以上灵材不足" % [
+				GameState.get_temper_material_min_tier(slot)])
 		return
 	_rebuild_equipment()
 	EventBus.toast.emit("祭炼至 %d 重（+%d 重）：消耗 灵石 %s、%s ×%d" % [
@@ -1307,7 +1546,11 @@ func _rebuild_equipment() -> void:
 			column.add_child(badge_row)
 			var temper_level := GameState.get_temper_level(slot)
 			if temper_level > 0:
-				badge_row.add_child(ThemeBuilder.create_seal_badge("祭炼 +%d" % temper_level,
+				var temper_badge := "祭炼 %d / %d · 已圆满" % [
+					temper_level, GameState.MAX_TEMPER_LEVEL] \
+					if temper_level >= GameState.MAX_TEMPER_LEVEL \
+					else "祭炼 %d / %d" % [temper_level, GameState.MAX_TEMPER_LEVEL]
+				badge_row.add_child(ThemeBuilder.create_seal_badge(temper_badge,
 					"gold" if temper_level >= 10 else "jade"))
 			if quality > 0:
 				# 品质徽标紧凑「极品 / 精良」（增益数字在括号拆色行体现）
@@ -1319,18 +1562,26 @@ func _rebuild_equipment() -> void:
 				column.add_child(_build_temper_stats_row(item, quality, temper_level, slot))
 			var btn_row := ThemeBuilder.hbox(6)
 			column.add_child(btn_row)
-			var temper_button := ThemeBuilder.small_button("祭炼" if temper_unlocked
-				else "需 筑基中期")
+			var temper_full := temper_level >= GameState.MAX_TEMPER_LEVEL
+			var temper_ready := GameState.can_temper_slot(slot)
+			var temper_button := ThemeBuilder.small_button("祭炼已圆满" if temper_full else (
+				"祭炼" if temper_ready else "需 筑基中期"))
 			temper_button.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
 			temper_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			temper_button.disabled = not temper_unlocked
-			temper_button.tooltip_text = "" if temper_unlocked else "筑基中期开启祭炼"
+			temper_button.disabled = not temper_ready
+			if temper_full:
+				temper_button.tooltip_text = "已臻极境，无需再耗灵石与灵材"
+			elif not temper_ready:
+				temper_button.tooltip_text = "筑基中期开启祭炼"
+			else:
+				temper_button.tooltip_text = ""
 			ThemeBuilder.apply_font_size(temper_button, ThemeBuilder.FONT_BODY_SUB)
 			ThemeBuilder.apply_brush_kai(temper_button)
-			temper_button.pressed.connect(func() -> void:
-				if AudioManager != null:
-					AudioManager.play_tap()
-				_show_temper_sheet(slot))
+			if temper_ready:
+				temper_button.pressed.connect(func() -> void:
+					if AudioManager != null:
+						AudioManager.play_tap()
+					_show_temper_sheet(slot))
 			btn_row.add_child(temper_button)
 			var button := ThemeBuilder.small_button("卸下")
 			button.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
@@ -1372,9 +1623,14 @@ func select_tab(tab: String) -> void:
 
 
 func _on_filter_pressed(key: String) -> void:
+	# 切换分页先干净收起详情弹窗，避免旧内容参与下一次高度测量
+	if BottomSheet.instance != null and is_instance_valid(BottomSheet.instance) \
+			and BottomSheet.instance.visible:
+		BottomSheet.instance.hide_sheet()
 	_filter = key
 	# 只清选中，详情槽保持常驻占位（由 rebuild 自动选中当前页首项）
 	_selected_item_id = ""
+	_selected_quality = -1
 	_refresh_filter_styles()
 	rebuild()
 
@@ -1386,22 +1642,28 @@ func _show_item_detail() -> void:
 		return
 	if AudioManager != null:
 		AudioManager.play_tap()
-	_show_item_detail_sheet(item)
+	_show_item_detail_sheet(item, _selected_quality)
 
 
-## 行囊三段式详情：身份（IconFrame + 品阶色名称 + 标签）+ 核心数值 + 用途 + 操作
-func _show_item_detail_sheet(item: ItemData) -> void:
-	var count := GameState.get_item_count(item.id)
-	var fine_count := GameState.get_quality_count(item.id, 1)
-	var epic_count := GameState.get_quality_count(item.id, 2)
+## 行囊三段式详情：身份 + 数值 + 用途 + 操作，按当前选中品质精确展示
+func _show_item_detail_sheet(item: ItemData, quality: int = -1) -> void:
+	var count := GameState.get_quality_count(item.id, quality) if quality >= 0 \
+		else GameState.get_item_count(item.id)
+	var quality_name := "" if quality < 0 else GameState.get_quality_name(quality)
 	var grade: Dictionary = DataRegistry.get_material_grade(item.id)
 	var tier := int(grade.get("tier", 0))
 	var grade_color := ThemeBuilder.COLOR_TEXT_PRIMARY
 	if not grade.is_empty():
 		grade_color = ThemeBuilder.material_grade_color(tier)
+	if quality == 2:
+		grade_color = ThemeBuilder.COLOR_TEXT_GOLD
+	elif quality == 1:
+		grade_color = ThemeBuilder.COLOR_EMERALD
 
 	var tags: Array = []
-	if not grade.is_empty():
+	if quality >= 0:
+		tags.append({"text": quality_name, "color": grade_color})
+	elif not grade.is_empty():
 		tags.append({"text": String(grade["name"]), "color": grade_color})
 	if item.element != ItemData.Element.NONE:
 		tags.append({"text": ItemData.element_name(item.element) + "行",
@@ -1409,23 +1671,19 @@ func _show_item_detail_sheet(item: ItemData) -> void:
 	tags.append({"text": ItemData.category_name(item.category),
 		"color": ThemeBuilder.COLOR_TEXT_SECONDARY})
 
-	var stock := "凡品 ×%d" % count
-	if fine_count > 0:
-		stock += " · 精良 ×%d" % fine_count
-	if epic_count > 0:
-		stock += " · 极品 ×%d" % epic_count
+	var stock := "%s ×%d" % [quality_name if quality >= 0 else "持有", count]
 	var rows: Array = [
 		{"label": "持有", "value": stock, "color": ThemeBuilder.COLOR_TEXT_PRIMARY},
 		{"label": "化灵单价", "value": "%d 灵石" % DataRegistry.get_material_dissolve_value(item.id),
 			"color": ThemeBuilder.COLOR_TEXT_GOLD},
-		{"label": "出售单价", "value": "%d 灵石" % item.sell_price,
+		{"label": "出售单价", "value": "%d 灵石" % _quality_sell_price(item, quality),
 			"color": ThemeBuilder.COLOR_TEXT_GOLD},
 	]
-	var stat_text := item.get_stat_summary()
+	var stat_text := _quality_stat_summary(item, quality)
 	if stat_text != "":
 		rows.append({"label": "关键属性", "value": stat_text,
 			"color": ThemeBuilder.COLOR_TEXT_JADE})
-	if not grade.is_empty():
+	if quality < 0 and not grade.is_empty():
 		rows.append({
 			"label": "品阶效用",
 			"value": "肥力 %d / 株" % int(grade.get("fertility", 0)),
@@ -1452,29 +1710,37 @@ func _show_item_detail_sheet(item: ItemData) -> void:
 	BottomSheet.show_detail({
 		"title": item.display_name,
 		"title_color": grade_color,
-		"icon": IconLibrary.get_item_icon(item.id, 2 if epic_count > 0 else (
-			1 if fine_count > 0 else -1)),
+		"icon": IconLibrary.get_item_icon(item.id, quality),
 		"icon_accent": ItemData.element_color(item.element),
 		"tags": tags,
 		"rows": rows,
 		"note": note,
-		"actions": _build_item_detail_actions(item, count),
+		"actions": _build_item_detail_actions(item, count, quality),
 	})
 
 
-func _build_item_detail_actions(item: ItemData, count: int) -> Array:
+func _build_item_detail_actions(item: ItemData, count: int,
+		quality: int = -1) -> Array:
 	var actions: Array = []
 	if item.is_equipment():
+		var equipped_same := _is_equipped_item(item, quality)
 		actions.append({
-			"text": "穿戴", "accent": true, "primary": true,
+			"text": "卸下" if equipped_same else "穿戴",
+			"accent": true, "primary": not equipped_same,
+			"disabled": false,
 			"callback": func() -> void:
 				if not _begin_action():
 					return
 				var center := _sheet_icon_center()
-				var ok := bool(GameState.equip_item(item.id))
+				var ok := false
+				if equipped_same:
+					ok = GameState.unequip_slot(item.equip_slot)
+				else:
+					ok = GameState.equip_item_with_quality(item.id, quality) if quality >= 0 \
+						else GameState.equip_item(item.id)
 				if ok:
-					_play_artifact_fx(center, true)
-				_after_sheet_action(item, ok, true),
+					_play_artifact_fx(center, not equipped_same)
+				_after_sheet_action(item, ok, true, quality),
 		})
 	if item.is_consumable():
 		var is_special := item.id == DataRegistry.SPIRIT_DEW \
@@ -1488,7 +1754,7 @@ func _build_item_detail_actions(item: ItemData, count: int) -> Array:
 				if not _begin_action():
 					return
 				var ok := bool(GameState.use_item(item.id))
-				_after_sheet_action(item, ok),
+				_after_sheet_action(item, ok, false, quality),
 		})
 	if item.id != DataRegistry.SPIRIT_STONE:
 		actions.append({
@@ -1496,8 +1762,8 @@ func _build_item_detail_actions(item: ItemData, count: int) -> Array:
 			"callback": func() -> void:
 				if not _begin_action():
 					return
-				var ok := bool(GameState.sell_item(item.id, 1))
-				_after_sheet_action(item, ok),
+				var ok := _sell_selected(item, 1, quality)
+				_after_sheet_action(item, ok > 0, false, quality),
 		})
 		if count > 1:
 			actions.append({
@@ -1505,26 +1771,8 @@ func _build_item_detail_actions(item: ItemData, count: int) -> Array:
 				"callback": func() -> void:
 					if not _begin_action():
 						return
-					var ok := bool(GameState.sell_item(item.id, count))
-					_after_sheet_action(item, ok, true),
-			})
-		if GameState.get_quality_count(item.id, 1) > 0:
-			actions.append({
-				"text": "售精",
-				"callback": func() -> void:
-					if not _begin_action():
-						return
-					var ok := bool(GameState.sell_quality_item(item.id, 1, 1))
-					_after_sheet_action(item, ok),
-			})
-		if GameState.get_quality_count(item.id, 2) > 0:
-			actions.append({
-				"text": "售极",
-				"callback": func() -> void:
-					if not _begin_action():
-						return
-					var ok := bool(GameState.sell_quality_item(item.id, 1, 2))
-					_after_sheet_action(item, ok, true),
+					var ok := _sell_selected(item, count, quality)
+					_after_sheet_action(item, ok > 0, true, quality),
 			})
 	return actions
 

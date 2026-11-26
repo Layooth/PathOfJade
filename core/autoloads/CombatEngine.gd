@@ -82,25 +82,25 @@ func start_tower_combat(floor_num: int) -> Dictionary:
 ## 塔神赐里程碑（每 5 层首通一次性）：
 ## 偶数节点（10/20/…）= 百年朱果 ×1 + 聚灵甘露 ×2；奇数节点（5/15/…）= 仙盟贡献 + 高阶灵材礼匣
 func _grant_tower_milestone(floor_num: int) -> void:
-	if floor_num % 10 == 0:
-		GameState.add_item(DataRegistry.CRIMSON_FRUIT, 1)
-		GameState.add_item(DataRegistry.SPIRIT_DEW, 2)
-		_log("塔神赐福（第 %d 层）：百年朱果 ×1，聚灵甘露 ×2" % floor_num)
-		GameState.push_activity_log("镇魔塔神赐：百年朱果 + 聚灵甘露", "gold")
-	else:
-		var points := 20 + floor_num * 2
+	var reward: Dictionary = DataRegistry.get_tower_milestone_reward(floor_num)
+	if reward.is_empty():
+		return
+	var parts: Array[String] = []
+	for value in reward.get("items", []):
+		var entry: Dictionary = value
+		var item_id := String(entry.get("id", ""))
+		if item_id == "" or DataRegistry.get_item(item_id) == null:
+			continue
+		var amount := maxi(1, int(entry.get("amount", 1)))
+		GameState.add_item(item_id, amount)
+		parts.append("%s ×%d" % [DataRegistry.get_item_name(item_id), amount])
+	var points := maxi(0, int(reward.get("points", 0)))
+	if points > 0:
 		GameState.alliance_points += points
-		var candidates: Array = []
-		for item_key in DataRegistry.items.keys():
-			var grade: Dictionary = DataRegistry.get_material_grade(String(item_key))
-			if not grade.is_empty() and int(grade.get("tier", 0)) >= 3:
-				candidates.append(String(item_key))
-		for i in range(2):
-			if candidates.is_empty():
-				break
-			GameState.add_item(String(candidates[randi() % candidates.size()]), 2)
-		_log("塔神赐福（第 %d 层）：仙盟贡献 +%d，高阶灵材礼匣" % [floor_num, points])
-		GameState.push_activity_log("镇魔塔神赐：仙盟贡献 + 高阶灵材", "gold")
+	var node_name := "十层重奖" if bool(reward.get("tenth", false)) else "妖王礼赐"
+	_log("塔神赐福（第 %d 层 · %s）：%s，仙盟贡献 +%d" % [
+		floor_num, node_name, "，".join(parts), points])
+	GameState.push_activity_log("镇魔塔神赐：%s" % "，".join(parts), "gold")
 	GameState.vibrate_heavy()
 
 
@@ -425,15 +425,16 @@ func _on_enemy_defeated() -> void:
 		var floor_num := tower_floor
 		var first_clear := not GameState.is_tower_floor_claimed(floor_num)
 		if first_clear:
-			var multiplier := 2 if floor_num % 5 == 0 else 1
-			GameState.claim_tower_floor(floor_num,
-				50 * floor_num * multiplier, (10 + floor_num) * multiplier)
+			var reward: Dictionary = GameState.get_tower_first_clear_reward(floor_num)
+			var reward_stones := int(reward.get("stones", 0))
+			var reward_points := int(reward.get("points", 0))
+			GameState.claim_tower_floor(floor_num, reward_stones, reward_points)
 			# 首次击败守关妖魔、刷新最高层：厚重仪式感单次重震
 			GameState.vibrate_heavy()
 			if AudioManager != null:
 				AudioManager.play_breakthrough()
-			_log("首通第 %d 层：灵石 +%d，贡献 +%d" % [floor_num,
-				50 * floor_num * multiplier, (10 + floor_num) * multiplier])
+			_log("首通第 %d 层（层段 %d）：灵石 +%d，贡献 +%d" % [floor_num,
+				int(reward.get("tier", 1)), reward_stones, reward_points])
 			# 5 层节点神赐（一次性）：偶数节点赐奇珍，奇数节点赐仙盟礼
 			if floor_num % 5 == 0:
 				_grant_tower_milestone(floor_num)

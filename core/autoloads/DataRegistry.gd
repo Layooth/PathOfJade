@@ -2773,8 +2773,8 @@ func get_tower_enemy(floor_num: int) -> EnemyData:
 	enemy.id = "tower_%d" % floor_num
 	enemy.region_id = "tower"
 	enemy.is_boss = is_king
-	enemy.max_hp = roundi(220.0 * pow(1.095, float(floor_num - 1)))
-	enemy.attack = roundi(16.0 * pow(1.08, float(floor_num - 1)))
+	enemy.max_hp = roundi(220.0 * pow(1.085, float(floor_num - 1)))
+	enemy.attack = roundi(16.0 * pow(1.088, float(floor_num - 1)))
 	enemy.defense = roundi(5.0 * pow(1.075, float(floor_num - 1)))
 	enemy.attack_interval = 2.5
 	enemy.xp_reward = 40.0 * float(floor_num)
@@ -3031,6 +3031,100 @@ func get_enemy_grade(enemy_id: String) -> Dictionary:
 	var grade := GameFormulas.get_material_grade_by_level(lv)
 	grade["unlock_level"] = lv
 	return grade
+
+
+## 镇魔塔里程碑奖励统一数据源：CombatEngine 发奖与 TowerPanel 预告共用。
+## 所有 item_id 均来自 ITEM_DEFS / 系统耗材表，禁止另写阶位名或虚构材料。
+func get_tower_milestone_reward(floor_num: int) -> Dictionary:
+	var safe_floor := maxi(1, floor_num)
+	if safe_floor < 5 or safe_floor % 5 != 0:
+		return {}
+	var is_tenth := safe_floor % 10 == 0
+	var band := 0
+	if safe_floor >= 130:
+		band = 3
+	elif safe_floor >= 90:
+		band = 2
+	elif safe_floor >= 50:
+		band = 1
+	var endless_step := 0
+	if band == 3:
+		endless_step = clampi((safe_floor - 130) / 20, 0, 4)
+	var items: Array = []
+	var points := 0
+	if is_tenth:
+		match band:
+			0:
+				items = [
+					{"id": "item_crimson_fruit", "amount": 1},
+					{"id": "item_spirit_nectar", "amount": 2},
+					{"id": "item_beast_core", "amount": 5},
+				]
+				points = 40 + safe_floor * 2
+			1:
+				items = [
+					{"id": "item_taixu_gold", "amount": 4},
+					{"id": "item_nascent_pill", "amount": 2},
+					{"id": "item_yuanying_pill", "amount": 2},
+					{"id": "item_spirit_nectar", "amount": 4},
+				]
+				points = 200 + safe_floor * 5
+			2:
+				items = [
+					{"id": "item_hundun_flower", "amount": 3},
+					{"id": "item_hundun_stone", "amount": 3},
+					{"id": "item_trib_lianxu", "amount": 2},
+					{"id": "item_huashen_note", "amount": 2},
+				]
+				points = 800 + safe_floor * 10
+			_:
+				items = [
+					{"id": "item_hongmeng_herb", "amount": 2 + endless_step},
+					{"id": "item_worldtree", "amount": 2 + endless_step},
+					{"id": "item_hongmeng_gold", "amount": 2 + endless_step},
+					{"id": "item_ascension_pill", "amount": 1 + mini(2, endless_step / 2)},
+					{"id": "item_worldtree_ward", "amount": 1 + mini(2, endless_step / 2)},
+				]
+				points = 2000 + safe_floor * 20 + endless_step * 600
+	else:
+		match band:
+			0:
+				items = [
+					{"id": "item_beast_core", "amount": 5},
+					{"id": "item_ziyun", "amount": 5},
+					{"id": "item_mithril", "amount": 5},
+				]
+				points = 20 + safe_floor * 2
+			1:
+				items = [
+					{"id": "item_ancient_soul", "amount": 3},
+					{"id": "item_star_core", "amount": 3},
+					{"id": "item_nascent_pill", "amount": 2},
+				]
+				points = 120 + safe_floor * 5
+			2:
+				items = [
+					{"id": "item_huashen_note", "amount": 2},
+					{"id": "item_taiyi_lian", "amount": 2},
+					{"id": "item_hundun_flower", "amount": 1},
+					{"id": "item_trib_lianxu", "amount": 1},
+				]
+				points = 500 + safe_floor * 10
+			_:
+				items = [
+					{"id": "item_demon_essence", "amount": 4 + endless_step},
+					{"id": "item_thunder_essence", "amount": 3 + endless_step},
+					{"id": "item_dragon_scale", "amount": 2 + endless_step},
+					{"id": "item_hongmeng_gold", "amount": 1 + endless_step},
+				]
+				points = 1200 + safe_floor * 15 + endless_step * 400
+	return {
+		"floor": safe_floor,
+		"band": band,
+		"tenth": is_tenth,
+		"items": items,
+		"points": points,
+	}
 
 
 ## 镇魔塔妖魔品阶：每 3 层约等 1 级（第 1 层凡阶 … 第 40 层起神阶）

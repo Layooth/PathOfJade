@@ -23,6 +23,8 @@ const QUALITY_MULTIPLIERS: Array[float] = [1.0, 1.2, 1.4]
 const QUALITY_NAMES: Array[String] = ["凡品", "精良", "极品"]
 ## 祭炼开启门槛：筑基中期；旧档 equip_temper_levels 加成保持原样生效
 const TEMPER_UNLOCK_ORDER: int = 10
+## 与 GameFormulas 共用同一硬上限，兵刃 / 法袍各自独立封顶
+const MAX_TEMPER_LEVEL: int = GameFormulas.MAX_TEMPER_LEVEL
 
 # ---------------------------------------------------------------- 运行时状态
 
@@ -42,7 +44,7 @@ var active_bounties: Array = []
 var bounty_free_refresh_unix: float = 0.0
 ## 每日镇魔俸禄领取日（UTC 天数；旧档缺字段默认 -1 表示未领）
 var last_tower_salary_day: int = -1
-## 本命祭炼等级（兵刃 / 法袍各自独立，无上限长线消耗口；旧档缺字段默认 0）
+## 本命祭炼等级（兵刃 / 法袍各自独立，封顶 50 重；旧档超上限保留收益但不再提升）
 var equip_temper_levels: Dictionary = {"weapon": 0, "armor": 0}
 ## 渐进伪随机保底计数器（功法残卷 / 灵种伴生 / 灵田奇珍 / 锻造极品；
 ## 旧档缺字段默认空字典，出货即清零）
@@ -1267,10 +1269,10 @@ func get_defense() -> int:
 
 # ---------------------------------------------------------------- 本命祭炼（中后期长线消耗口）
 
-## 祭炼消耗：灵石 50000 × 1.10^level（平缓曲线：每 10 级约 2.6 倍，50 级单级约 580 万），
-## 材料 5 + level×1.5 件（3 阶以上灵材/丹药）
-const TEMPER_STONE_BASE: float = 50000.0
-const TEMPER_STONE_GROWTH: float = 1.10
+## 祭炼消耗：灵石 5000 × 1.15^level，0→1 重 5000，49→50 重约 471 万。
+## 材料 5 + level×1.5 件；未满 10 重需 2 阶以上灵材，满 10 重后需 3 阶以上
+const TEMPER_STONE_BASE: float = 5000.0
+const TEMPER_STONE_GROWTH: float = 1.15
 const TEMPER_MAT_BASE: int = 5
 const TEMPER_CRIT_CAP: float = 0.25
 
@@ -1284,6 +1286,11 @@ func can_temper_equipment() -> bool:
 	return get_realm_index() >= TEMPER_UNLOCK_ORDER
 
 
+## 指定槽位是否还能继续祭炼：境界达标且当前重数未达 50 重
+func can_temper_slot(slot: String) -> bool:
+	return can_temper_equipment() and get_temper_level(slot) < MAX_TEMPER_LEVEL
+
+
 func temper_stone_cost(slot: String) -> int:
 	return int(round(TEMPER_STONE_BASE * pow(TEMPER_STONE_GROWTH,
 		float(get_temper_level(slot)))))
@@ -1293,10 +1300,18 @@ func temper_material_cost(slot: String) -> int:
 	return TEMPER_MAT_BASE + int(get_temper_level(slot) * 1.5)
 
 
-## 祭炼材料候选：3 阶（玄阶）以上灵材/丹药，优先库存 > 50 中最富余者
-func find_temper_material() -> String:
+## 当前重数所需材料品阶：未满 10 重为 2 阶，满 10 重起为 3 阶
+func get_temper_material_min_tier(slot: String = "") -> int:
+	if slot != "" and get_temper_level(slot) >= 10:
+		return 3
+	return 2
+
+
+## 祭炼材料候选：按当前重数筛选品阶门槛，优先库存 > 50 中最富余者
+func find_temper_material(slot: String = "") -> String:
 	var best := ""
 	var best_score := -100000
+	var min_tier := get_temper_material_min_tier(slot)
 	for item_key in inventory.keys():
 		var item_id := String(item_key)
 		var count := get_item_count(item_id)
@@ -1306,7 +1321,7 @@ func find_temper_material() -> String:
 		if item == null or item.is_equipment():
 			continue
 		var tier := int(DataRegistry.get_material_grade(item_id).get("tier", 0))
-		if tier < 3:
+		if tier < min_tier:
 			continue
 		# 库存 > 50 优先（score 加权），同档取最富余
 		var score := count + (50000 if count > 50 else 0)
@@ -1318,19 +1333,26 @@ func find_temper_material() -> String:
 
 ## 祭炼落账：可连炼 times 次，材料/灵石不足即停。批量期间静音信号防重建卡顿。
 func temper_equipment(slot: String, times: int = 1) -> Dictionary:
-	# 未达筑基中期不落账、不扣材料；equip_temper_levels 原样保留
+	# 未达筑基中期或已达 50 重均不落账、不扣材料；旧档超上限原样保留收益
 	if not can_temper_equipment():
 		return {"ok": false, "reason": "需 筑基中期", "levels": 0,
+			"stones": 0, "mat_id": "", "mat_amount": 0}
+	if get_temper_level(slot) >= MAX_TEMPER_LEVEL:
+		return {"ok": false, "reason": "已至祭炼圆满之境", "levels": 0,
 			"stones": 0, "mat_id": "", "mat_amount": 0}
 	var done := 0
 	var stones_spent := 0
 	var mat_id := ""
 	var mat_spent := 0
+	var reason := ""
 	change_signals_muted = true
 	for i in range(maxi(1, times)):
+		if get_temper_level(slot) >= MAX_TEMPER_LEVEL:
+			reason = "已至祭炼圆满之境"
+			break
 		var stone := temper_stone_cost(slot)
 		var mat_need := temper_material_cost(slot)
-		var candidate := find_temper_material()
+		var candidate := find_temper_material(slot)
 		if candidate == "" or get_item_count(candidate) < mat_need \
 				or get_item_count(DataRegistry.SPIRIT_STONE) < stone:
 			break
@@ -1346,7 +1368,7 @@ func temper_equipment(slot: String, times: int = 1) -> Dictionary:
 		EventBus.inventory_changed.emit()
 		EventBus.equipment_changed.emit()
 		EventBus.stats_changed.emit()
-	return {"ok": done > 0, "levels": done, "stones": stones_spent,
+	return {"ok": done > 0, "reason": reason, "levels": done, "stones": stones_spent,
 		"mat_id": mat_id, "mat_amount": mat_spent}
 
 
@@ -1468,7 +1490,29 @@ func _compact_tower_claimed() -> void:
 	tower_claimed_upto = floor_num - 1
 
 
-## 首通奖励：50×层 灵石 + 10+层 贡献（妖王层在调用侧翻倍）
+## 首通奖励层段倍率：每跨 25 层升一档，妖王层在公式内翻倍。
+## 倍率封顶可避免仙阶无尽段首通灵石无限膨胀；每日俸禄公式保持不变。
+const TOWER_FIRST_CLEAR_TIER_MULTIPLIERS: Array = [
+	1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 18.0, 26.0
+]
+
+
+## 镇魔塔首通奖励统一入口：CombatEngine 结算与 TowerPanel 预览共用
+func get_tower_first_clear_reward(floor_num: int) -> Dictionary:
+	var safe_floor := maxi(1, floor_num)
+	var tier_index := clampi((safe_floor - 1) / 25, 0,
+		TOWER_FIRST_CLEAR_TIER_MULTIPLIERS.size() - 1)
+	var tier_mult := float(TOWER_FIRST_CLEAR_TIER_MULTIPLIERS[tier_index])
+	var king_mult := 2 if safe_floor % 5 == 0 else 1
+	return {
+		"stones": int(round(50.0 * float(safe_floor) * tier_mult * float(king_mult))),
+		"points": int(round(float(10 + safe_floor) * tier_mult * float(king_mult))),
+		"tier": tier_index + 1,
+		"king": king_mult == 2,
+	}
+
+
+## 首通奖励入账
 func claim_tower_floor(floor_num: int, stones: int, points: int) -> void:
 	if is_tower_floor_claimed(floor_num):
 		return
@@ -2260,22 +2304,30 @@ func _use_crimson_fruit(item: ItemData) -> bool:
 # ---------------------------------------------------------------- 装备
 
 func equip_item(item_id: String) -> bool:
+	if int(epic_items.get(item_id, 0)) > 0:
+		return equip_item_with_quality(item_id, 2)
+	if int(fine_items.get(item_id, 0)) > 0:
+		return equip_item_with_quality(item_id, 1)
+	return equip_item_with_quality(item_id, 0)
+
+
+## 指定品质穿戴：供储物袋按品质拆格后的单格操作使用，存档字段不变
+func equip_item_with_quality(item_id: String, requested_quality: int) -> bool:
 	var item := DataRegistry.get_item(item_id)
 	if item == null or not item.is_equipment():
 		return false
-	if get_item_count(item_id) <= 0:
+	if get_quality_count(item_id, requested_quality) <= 0:
 		return false
 	var slot := item.equip_slot
 	if not EQUIP_SLOTS.has(slot):
 		return false
-	var quality := 0
-	if int(epic_items.get(item_id, 0)) > 0:
+	var quality := clampi(requested_quality, 0, 2)
+	if quality == 2:
 		epic_items[item_id] = int(epic_items[item_id]) - 1
-		quality = 2
-	elif int(fine_items.get(item_id, 0)) > 0:
+	elif quality == 1:
 		fine_items[item_id] = int(fine_items[item_id]) - 1
-		quality = 1
-	remove_item(item_id, 1)
+	else:
+		remove_item(item_id, 1)
 	var old := _as_dict(equipment.get(slot, {}))
 	var old_id := String(old.get("id", ""))
 	if old_id != "":
