@@ -3,6 +3,8 @@ extends Control
 ## 「镇魔塔」无尽冲层：动态妖魔、首通奖励、自动冲层、历史最高层持久化。
 
 const UNLOCK_ORDER: int = 9
+## 镇魔塔战报环形上限，与 CombatEngine 独立塔纪要缓冲一致
+const TOWER_LOG_LIMIT: int = 40
 const UNLOCK_LABEL: String = "筑基初期"
 const UNLOCK_DESC: String = "镇魔塔可逐层挑战妖魔，领取首通灵石与每日俸禄，并记录历史最高层。突破至筑基初期后开启。"
 
@@ -29,6 +31,22 @@ var _body: BoxContainer
 var _left_col: VBoxContainer
 var _right_col: VBoxContainer
 var _is_dirty: bool = false
+## 药囊库存签名：普通草药掉落不改这五格时，绝不重建胶囊
+var _potion_sig: String = ""
+## 底部妖魔 / 战况卡：宽屏与三才卡等高对齐
+var _info_card: PanelContainer
+var _info_base_h: float = 0.0
+## 战斗纪要：宽屏按剩余高度延展，竖屏保持原高
+var _log_panel: PanelContainer
+var _log_scroll: ScrollContainer
+var _log_box: VBoxContainer
+var _log_empty_label: Label
+var _tower_logs: Array[String] = []
+var _log_dirty: bool = false
+var _log_base_h: float = 160.0
+## 空间不足时只微调舞台高度，保证纪要 160px 保底仍能落到底部安全边距
+var _stage_base_h: float = 0.0
+var _fit_frames: int = 0
 
 
 func _ready() -> void:
@@ -37,9 +55,11 @@ func _ready() -> void:
 	EventBus.combat_started.connect(_on_any_state)
 	EventBus.combat_stopped.connect(_on_any_state_str)
 	EventBus.combat_updated.connect(_on_updated)
+	EventBus.combat_log.connect(_on_combat_log)
 	EventBus.combat_enemy_defeated.connect(_on_enemy_defeated_for_ring)
 	EventBus.layout_changed.connect(_on_layout_changed)
 	EventBus.inventory_changed.connect(_refresh_potion_capsules)
+	resized.connect(_on_self_resized)
 	EventBus.realm_changed.connect(_on_realm_changed_for_gate)
 	visibility_changed.connect(_on_visibility_changed)
 	_apply_unlock_gate()
@@ -52,6 +72,10 @@ func _on_realm_changed_for_gate(_realm_id: String, _realm_name: String) -> void:
 
 
 func _process(delta: float) -> void:
+	# 宽屏延展：布局重排后连算 4 帧，等两栏高度稳定再定稿
+	if _fit_frames > 0:
+		_fit_frames -= 1
+		_fit_bottom()
 	# 蓄势条必须逐帧驱动：原先只有秘境页在推 set_charge，
 	# 镇魔塔舞台的细进度条一直停在 0（看起来「不走」）
 	_update_stage_charge()
@@ -168,6 +192,7 @@ func _build() -> void:
 	_left_col = left
 	var right := ThemeBuilder.vbox(8)
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	right.size_flags_stretch_ratio = 0.85
 	body.add_child(right)
 	_right_col = right
@@ -180,6 +205,7 @@ func _build() -> void:
 	# 首通节点神赐预告：下一重奖内容一目了然
 	_next_reward_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_JADE)
+	ThemeBuilder.enable_phrase_wrap(_next_reward_label)
 	ThemeBuilder.apply_font_size(_next_reward_label, ThemeBuilder.FONT_CAPTION)
 	_next_reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_next_reward_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -191,6 +217,7 @@ func _build() -> void:
 	# 严格模式隔离：镇魔塔舞台只吃镇魔塔战斗信号（秘境战斗不进血条/飘字）
 	_stage.mode_filter = "tower"
 	left.add_child(_stage)
+	_stage_base_h = _stage.custom_minimum_size.y
 
 	var button_row := ThemeBuilder.hbox(6)
 	left.add_child(button_row)
@@ -235,6 +262,7 @@ func _build() -> void:
 
 	var info := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD_DEEP, ThemeBuilder.COLOR_BORDER, 12, 10)
 	info.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_info_card = info
 	right.add_child(info)
 	var info_box := ThemeBuilder.vbox(6)
 	info.add_child(info_box)
@@ -242,11 +270,18 @@ func _build() -> void:
 		ThemeBuilder.FONT_CAPTION))
 	# 妖魔名用品阶 BBCode（按楼层折算），属性行跟随
 	_enemy_stat_label = ThemeBuilder.bbcode_label("", ThemeBuilder.FONT_BODY_SUB)
+	_enemy_stat_label.bbcode_enabled = true
+	_enemy_stat_label.fit_content = true
+	_enemy_stat_label.scroll_active = false
+	_enemy_stat_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_enemy_stat_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_enemy_stat_label.custom_minimum_size.x = 0.0
 	info_box.add_child(_enemy_stat_label)
 	info_box.add_child(ThemeBuilder.separator(1, ThemeBuilder.COLOR_BORDER))
 	info_box.add_child(ThemeBuilder.section_title_label("首通奖励",
 		ThemeBuilder.FONT_CAPTION))
 	_reward_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_BODY_SUB)
+	ThemeBuilder.enable_phrase_wrap(_reward_label)
 	ThemeBuilder.apply_font_size(_reward_label, ThemeBuilder.FONT_BODY_SUB)
 	_reward_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_reward_label.custom_minimum_size = Vector2(0, 0)
@@ -261,10 +296,103 @@ func _build() -> void:
 	_potion_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info_box.add_child(_potion_row)
 
+	# ---- 战斗纪要：宽屏横跨两栏下方，竖屏接在妖魔 / 消耗品卡后
+	_build_log_card()
 	ThemeBuilder.prepare_touch(root)
+	_info_base_h = info.get_combined_minimum_size().y
 	_apply_width(EventBus.workspace_width)
 	_lock_card = _build_lock_card()
 	add_child(_lock_card)
+
+
+## 战斗纪要卡：固定标题 + 5px 内边距滚动区 + 固定上限 Label 池
+func _build_log_card() -> void:
+	_log_panel = ThemeBuilder.card_panel()
+	_log_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_log_panel.custom_minimum_size = Vector2(0, _log_base_h)
+	_normal_root.add_child(_log_panel)
+	var outer := ThemeBuilder.vbox(6)
+	_log_panel.add_child(outer)
+	outer.add_child(ThemeBuilder.section_title_label("战斗纪要",
+		ThemeBuilder.FONT_BODY_SUB))
+	_log_scroll = ThemeBuilder.scroll_container()
+	_log_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(_log_scroll)
+	# 上下 5px 留白：滚到最新一条时首行不贴顶切头
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 5)
+	margin.add_theme_constant_override("margin_right", 5)
+	margin.add_theme_constant_override("margin_top", 5)
+	margin.add_theme_constant_override("margin_bottom", 5)
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_log_scroll.add_child(margin)
+	_log_box = ThemeBuilder.vbox(2)
+	_log_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(_log_box)
+	_log_empty_label = ThemeBuilder.wrap_label(
+		"尚未交锋，轻触「开始冲层」后将在此记录战况",
+		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM)
+	ThemeBuilder.apply_font_size(_log_empty_label, ThemeBuilder.FONT_CAPTION)
+	_log_box.add_child(_log_empty_label)
+	_tower_logs = CombatEngine.get_tower_log_lines()
+	while _tower_logs.size() > TOWER_LOG_LIMIT:
+		_tower_logs.pop_front()
+	_rebuild_log()
+
+
+func _rebuild_log() -> void:
+	if _log_box == null:
+		return
+	for child in _log_box.get_children():
+		_log_box.remove_child(child)
+		if child != _log_empty_label:
+			child.queue_free()
+	_log_empty_label.visible = _tower_logs.is_empty()
+	if _log_empty_label.get_parent() != _log_box:
+		_log_box.add_child(_log_empty_label)
+	for line in _tower_logs:
+		_append_log_label(line, false)
+	call_deferred("_scroll_log_to_bottom")
+
+
+func _append_log_label(line: String, defer_scroll: bool = true) -> void:
+	if _log_box == null or line == "":
+		return
+	if _log_empty_label.visible:
+		_log_empty_label.visible = false
+	var label := ThemeBuilder.wrap_label(line, ThemeBuilder.FONT_CAPTION,
+		ThemeBuilder.COLOR_TEXT)
+	ThemeBuilder.apply_font_size(label, ThemeBuilder.FONT_CAPTION)
+	_log_box.add_child(label)
+	while _log_box.get_child_count() > TOWER_LOG_LIMIT + 1:
+		var first := _log_box.get_child(1)
+		_log_box.remove_child(first)
+		first.queue_free()
+	if defer_scroll:
+		call_deferred("_scroll_log_to_bottom")
+
+
+func _scroll_log_to_bottom() -> void:
+	if _log_scroll == null or not is_instance_valid(_log_scroll):
+		return
+	var bar := _log_scroll.get_v_scroll_bar()
+	_log_scroll.scroll_vertical = maxi(0, int(bar.max_value - bar.page))
+
+
+## 只收镇魔塔战报；秘境战报由 CombatPanel 承接，双向隔离
+func _on_combat_log(line: String) -> void:
+	if not CombatEngine.is_tower_mode() and CombatEngine.tower_floor <= 0:
+		return
+	if line == "":
+		return
+	_tower_logs.append(line)
+	while _tower_logs.size() > TOWER_LOG_LIMIT:
+		_tower_logs.pop_front()
+	if not is_visible_in_tree():
+		_log_dirty = true
+		return
+	_append_log_label(line)
 
 
 func _on_layout_changed(_mode: int, _vp: Vector2, workspace: float) -> void:
@@ -272,12 +400,50 @@ func _on_layout_changed(_mode: int, _vp: Vector2, workspace: float) -> void:
 
 
 func _apply_width(workspace: float) -> void:
+	var compact := workspace < 680.0
 	if _body != null:
-		_body.vertical = workspace < 680.0
+		_body.vertical = compact
+		_body.size_flags_vertical = Control.SIZE_EXPAND_FILL if compact \
+			else Control.SIZE_SHRINK_BEGIN
 	if _left_col != null:
-		# 竖屏内容贴顶排布，避免左栏被撑开留下大片空洞
-		_left_col.size_flags_vertical = Control.SIZE_FILL \
-			if _body != null and _body.vertical else Control.SIZE_EXPAND_FILL
+		_left_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	if _right_col != null:
+		_right_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	if _log_panel != null:
+		_log_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL if compact \
+			else Control.SIZE_FILL
+	_request_fit()
+
+
+func _on_self_resized() -> void:
+	_request_fit()
+
+
+func _request_fit() -> void:
+	_fit_frames = 4
+
+
+## 宽屏：战斗纪要按「两栏底边 → 面板底边」补高到底部安全边距；竖屏恢复原高
+func _fit_bottom() -> void:
+	if _log_panel == null or _body == null:
+		return
+	if get_viewport().get_visible_rect().size.x < 840:
+		_log_panel.custom_minimum_size.y = _log_base_h
+		if _stage != null and _stage_base_h > 0.0:
+			_stage.custom_minimum_size.y = _stage_base_h
+		return
+	var available := get_global_rect().end.y - _body.get_global_rect().end.y - 20.0
+	# 1024 + 1.20 字档空间不足：先微调舞台高度，不牺牲纪要 160px 保底
+	if _stage != null and _stage_base_h > 0.0 \
+			and absf(_stage.custom_minimum_size.y - _stage_base_h) > 0.6:
+		_stage.custom_minimum_size.y = _stage_base_h
+	var target := maxf(_log_base_h, available)
+	# 极端窄高（1024×720 + 1.20）可视高度不足以同时容纳 160px 与 10px 间距：
+	# 宁可略降纪要最小高，也绝不让卡片越过面板底边被裁切。
+	if target > available + 10.0:
+		target = maxf(120.0, available)
+	if absf(target - _log_panel.custom_minimum_size.y) > 0.6:
+		_log_panel.custom_minimum_size.y = target
 
 
 func _on_any_state(_enemy_id: String) -> void:
@@ -293,6 +459,10 @@ func _on_visibility_changed() -> void:
 		_is_dirty = true
 		return
 	_is_dirty = false
+	if _log_dirty:
+		_log_dirty = false
+		_rebuild_log()
+	_request_fit()
 	refresh()
 
 
@@ -338,6 +508,9 @@ func _on_any_state_str(_reason: String) -> void:
 
 
 func _on_updated(_payload: Dictionary) -> void:
+	if not is_visible_in_tree():
+		_is_dirty = true
+		return
 	_refresh_live()
 
 
@@ -446,7 +619,7 @@ func refresh() -> void:
 	_floor_label.text = "镇魔塔 · 第 %d 层" % _floor
 	_best_label.text = "历史最高 %d 层" % GameState.tower_highest_floor
 	# 下一重奖预告 + 今日俸禄状态
-	_next_reward_label.text = _next_reward_text()
+	_next_reward_label.text = ThemeBuilder.protect_phrases(_next_reward_text())
 	var salary_ready := GameState.can_claim_tower_salary()
 	_salary_button.disabled = not salary_ready
 	_salary_button.text = "领取今日俸禄" if salary_ready else \
@@ -469,23 +642,25 @@ func refresh() -> void:
 
 	var enemy := CombatEngine.get_current_enemy() if running else DataRegistry.get_tower_enemy(_floor)
 	if enemy != null:
-		_enemy_stat_label.text = "%s\n气血 %s · 攻击 %s · 防御 %s · 间隔 %.1fs%s" % [
+		_enemy_stat_label.text = ThemeBuilder.protect_phrases(
+		"%s\n气血 %s · 攻击 %s · 防御 %s · 间隔 %.1fs%s" % [
 			ThemeBuilder.format_enemy_grade_bbcode(enemy.id, enemy.display_name),
 			GameFormulas.format_num(float(enemy.max_hp)),
 			GameFormulas.format_num(float(enemy.attack)),
 			GameFormulas.format_num(float(enemy.defense)),
-			enemy.attack_interval, "（妖王层）" if enemy.is_boss else ""]
+			enemy.attack_interval, "（妖王层）" if enemy.is_boss else ""])
 		if not running:
 			# 未开战时，舞台右侧预览当前选中层数的镇塔妖魔
 			_stage.show_preview_enemy(enemy)
 	var reward: Dictionary = GameState.get_tower_first_clear_reward(_floor)
 	var first_clear := not GameState.is_tower_floor_claimed(_floor)
-	_reward_label.text = "灵石 %s · 贡献 %d · 层段 %d%s%s" % [
-		GameFormulas.format_num(float(int(reward.get("stones", 0)))),
-		int(reward.get("points", 0)),
-		int(reward.get("tier", 1)),
-		"（妖王层 ×2）" if bool(reward.get("king", false)) else "",
-		"" if first_clear else " · 已领取"]
+	_reward_label.text = ThemeBuilder.protect_phrases(
+		"灵石 %s · 贡献 %d · 层段 %d%s%s" % [
+			GameFormulas.format_num(float(int(reward.get("stones", 0)))),
+			int(reward.get("points", 0)),
+			int(reward.get("tier", 1)),
+			"（妖王层 ×2）" if bool(reward.get("king", false)) else "",
+			"" if first_clear else " · 已领取"])
 	_refresh_potion_capsules()
 	_refresh_live()
 	if not running:
@@ -495,13 +670,25 @@ func refresh() -> void:
 func _refresh_potion_capsules() -> void:
 	if _potion_row == null:
 		return
-	for child in _potion_row.get_children():
-		_potion_row.remove_child(child)
-		child.queue_free()
+	# 隐藏页只记脏：库存信号每秒多次，绝不在后台重建药囊节点
+	if not is_visible_in_tree():
+		_is_dirty = true
+		return
 	var items: Array = [
 		"item_revive_pill", "item_heart_pill", "item_taixu_shield",
 		"item_taiji_talisman", "item_taixu_thunder",
 	]
+	var sig_parts: PackedStringArray = []
+	for item_id in items:
+		sig_parts.append("%d" % GameState.get_item_count(String(item_id)))
+	var potion_sig := "|".join(sig_parts)
+	# 普通材料掉落不会改变这五格库存：直接返回，不拆任何节点
+	if potion_sig == _potion_sig and _potion_row.get_child_count() > 0:
+		return
+	_potion_sig = potion_sig
+	for child in _potion_row.get_children():
+		_potion_row.remove_child(child)
+		child.queue_free()
 	for item_id in items:
 		var iid := String(item_id)
 		var capsule := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD_DEEP,
@@ -538,15 +725,16 @@ func _refresh_live() -> void:
 	if _floor != CombatEngine.tower_floor:
 		_floor = CombatEngine.tower_floor
 		_floor_label.text = "镇魔塔 · 第 %d 层" % _floor
-		_next_reward_label.text = _next_reward_text()
+		_next_reward_label.text = ThemeBuilder.protect_phrases(_next_reward_text())
 	var enemy := CombatEngine.get_current_enemy()
 	if enemy == null:
 		return
-	_enemy_stat_label.text = "%s\n气血 %s / %s · 攻击 %s · 防御 %s%s" % [
-		ThemeBuilder.format_enemy_grade_bbcode(enemy.id, enemy.display_name),
-		GameFormulas.format_num(float(maxi(0, CombatEngine.enemy_hp))),
-		GameFormulas.format_num(float(enemy.max_hp)),
-		GameFormulas.format_num(float(enemy.attack)),
-		GameFormulas.format_num(float(enemy.defense)),
-		"（妖王层）" if enemy.is_boss else ""]
+	_enemy_stat_label.text = ThemeBuilder.protect_phrases(
+		"%s\n气血 %s / %s · 攻击 %s · 防御 %s%s" % [
+			ThemeBuilder.format_enemy_grade_bbcode(enemy.id, enemy.display_name),
+			GameFormulas.format_num(float(maxi(0, CombatEngine.enemy_hp))),
+			GameFormulas.format_num(float(enemy.max_hp)),
+			GameFormulas.format_num(float(enemy.attack)),
+			GameFormulas.format_num(float(enemy.defense)),
+			"（妖王层）" if enemy.is_boss else ""])
 

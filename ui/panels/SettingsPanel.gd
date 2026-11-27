@@ -27,8 +27,6 @@ const BGM_MODE_OPTIONS: Array = [
 	{"value": 0, "label": "随境而变"},
 	{"value": 1, "label": "轮流雅奏"},
 ]
-## 关于卡片版本号：优先读应用配置，缺失时回退内置值
-const APP_VERSION_FALLBACK: String = "1.0.0"
 ## 开发者调试连点彩蛋：1.5 秒窗口内累计 7 次；第 4~6 次提示剩余次数
 const DEBUG_UNLOCK_TAPS: int = 7
 const DEBUG_UNLOCK_HINT_FROM: int = 4
@@ -44,7 +42,6 @@ var _scroll: ScrollContainer
 var _debug_tap_count: int = 0
 var _debug_last_tap_ms: int = 0
 ## 原生 versionName 读成功后缓存，避免每次切页都做一次 JNI 往返
-var _cached_native_version: String = ""
 var _audio_slider: HSlider
 var _audio_volume_label: Label
 var _music_slider: HSlider
@@ -60,6 +57,8 @@ var _cloud_sync_button: Button
 var _cloud_login_button: Button
 var _logout_button: Button
 var _patch_version_label: Label
+## 更新日志入口：44px 热区，随时回看本地保存的各卷更新说明
+var _update_log_button: Button
 
 
 func _ready() -> void:
@@ -548,12 +547,68 @@ func _build_about_card(parent: VBoxContainer) -> void:
 	_version_label = ThemeBuilder.label("版本 v%s" % get_app_version(),
 		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM)
 	box.add_child(_version_label)
+	# 版次行 + 更新日志入口并排：按钮保持 44px 触控高度
+	var patch_row := ThemeBuilder.hbox(8)
+	box.add_child(patch_row)
 	_patch_version_label = ThemeBuilder.label(_patch_version_text(),
 		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_SECONDARY)
-	box.add_child(_patch_version_label)
+	_patch_version_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	patch_row.add_child(_patch_version_label)
+	patch_row.add_child(ThemeBuilder.expander())
+	_update_log_button = ThemeBuilder.small_button("更新日志")
+	_update_log_button.custom_minimum_size = Vector2(96, ThemeBuilder.TOUCH_MIN)
+	_update_log_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ThemeBuilder.apply_font_size(_update_log_button, ThemeBuilder.FONT_CAPTION)
+	_update_log_button.pressed.connect(_show_update_log)
+	patch_row.add_child(_update_log_button)
 
 
-## 打开设置页时重读一次，保证展示永远是最新（Android 上重新导出 APK 后无需改代码）
+## 更新日志：底包版本 + 当前热更卷 + 本地保存的近几卷说明（倒序）
+func _show_update_log() -> void:
+	if AudioManager != null:
+		AudioManager.play_tap()
+	var current_rev := CloudSaveManager.get_current_patch_rev()
+	var notes: Array = CloudSaveManager.get_patch_notes()
+	var rows: Array = []
+	var head := ThemeBuilder.vbox(4)
+	var head_text := ThemeBuilder.wrap_label(
+		"当前版本 v%s · 当前热更：%s" % [get_app_version(),
+			"天道初开" if current_rev <= 0 else "天道第 %d 卷" % current_rev],
+		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_SECONDARY)
+	ThemeBuilder.apply_font_size(head_text, ThemeBuilder.FONT_CAPTION)
+	head.add_child(head_text)
+	rows.append({"custom": head})
+	if notes.is_empty():
+		var empty := ThemeBuilder.wrap_label("尚无更新说明，待下一卷天道演化。",
+			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM)
+		ThemeBuilder.apply_font_size(empty, ThemeBuilder.FONT_CAPTION)
+		rows.append({"custom": empty})
+	else:
+		for note_value in notes:
+			var note: Dictionary = note_value
+			var card := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD_DEEP,
+				ThemeBuilder.COLOR_BORDER, 8, 10)
+			card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var col := ThemeBuilder.vbox(4)
+			card.add_child(col)
+			var title := ThemeBuilder.label(
+				"天道第 %d 卷 · %s" % [int(note.get("rev", 0)),
+					CloudSaveManager.format_patch_date(
+						String(note.get("created_at", "")))],
+				ThemeBuilder.FONT_BODY_SUB, ThemeBuilder.COLOR_TEXT_TITLE_GOLD)
+			ThemeBuilder.apply_font_size(title, ThemeBuilder.FONT_BODY_SUB)
+			col.add_child(title)
+			var body := ThemeBuilder.wrap_label(String(note.get("notes", "")),
+				ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT)
+			ThemeBuilder.apply_font_size(body, ThemeBuilder.FONT_CAPTION)
+			col.add_child(body)
+			rows.append({"custom": card})
+	rows.append({"text": "已知晓", "color": ThemeBuilder.COLOR_TEXT_JADE,
+		"callback": func() -> void: pass})
+	BottomSheet.show_text("更新日志", rows, ThemeBuilder.COLOR_TEXT_TITLE_GOLD)
+
+
+## 打开设置页时重读一次：版本号来自 .pck 内 ThemeBuilder，热更后立即生效。
 func _refresh_version() -> void:
 	if _version_label == null:
 		return
@@ -562,62 +617,9 @@ func _refresh_version() -> void:
 		_version_label.text = text_value
 
 
-## 版本号：Android 真机优先用原生 APK 的 versionName（与导出预设 Version Name 一致），
-## 其余平台或原生读取失败时回退 application/config/version，最终兜底 "1.0.0"。
+## 客户端展示版本唯一出口：不再读 APK versionName / ProjectSettings。
 func get_app_version() -> String:
-	var native := _read_android_version_name()
-	if native != "":
-		return native
-	var configured := str(ProjectSettings.get_setting("application/config/version", "")).strip_edges()
-	if configured != "":
-		return configured
-	return APP_VERSION_FALLBACK
-
-
-## 原生包信息读取：多策略依次尝试，全部失败返回空串（交给上层回退 config/version），绝不抛错。
-## 策略一 ActivityThread.currentApplication()（隐藏 API，Android 9+ 可能被系统拦截）；
-## 策略二 org.godotengine.godot.Godot.getActivity()（应用自身公开类，不受隐藏 API 限制）。
-func _read_android_version_name() -> String:
-	if not OS.has_feature("android"):
-		return ""
-	if not ClassDB.class_exists("JavaClassWrapper"):
-		return ""
-	if _cached_native_version != "":
-		return _cached_native_version
-	var version := ""
-	var thread_class: Variant = JavaClassWrapper.wrap("android.app.ActivityThread")
-	if thread_class != null:
-		var app: Variant = thread_class.currentApplication()
-		if app != null:
-			version = _android_version_from_context(app)
-	if version == "":
-		var godot_class: Variant = JavaClassWrapper.wrap("org.godotengine.godot.Godot")
-		if godot_class != null:
-			var activity: Variant = godot_class.getActivity()
-			if activity != null:
-				version = _android_version_from_context(activity)
-	if version != "":
-		_cached_native_version = version
-		if OS.is_debug_build():
-			print("[PathOfJade] 原生 APK versionName = ", version)
-	return version
-
-
-## Context（Application / Activity）→ PackageInfo.versionName
-func _android_version_from_context(context: Variant) -> String:
-	var package_name: Variant = context.getPackageName()
-	if package_name == null or str(package_name) == "":
-		return ""
-	var manager: Variant = context.getPackageManager()
-	if manager == null:
-		return ""
-	var info: Variant = manager.getPackageInfo(str(package_name), 0)
-	if info == null:
-		return ""
-	var version: Variant = info.get("versionName")
-	if version == null:
-		return ""
-	return str(version).strip_edges()
+	return ThemeBuilder.APP_DISPLAY_VERSION
 
 
 func _on_about_card_gui_input(event: InputEvent) -> void:

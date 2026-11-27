@@ -115,10 +115,13 @@ func show_info(title_text: String, rows: Array,
 		var desc := String(dict.get("desc", ""))
 		# 富文本行：混色图例等场景，颜色值由 ThemeBuilder.hex(COLOR_*) 生成
 		if dict.has("bbcode"):
-			_body.add_child(ThemeBuilder.bbcode_label(String(dict["bbcode"]),
-				int(dict.get("font_size", ThemeBuilder.FONT_CAPTION))))
+			var bbcode_label := ThemeBuilder.bbcode_label(
+				ThemeBuilder.protect_phrases(String(dict["bbcode"])),
+				int(dict.get("font_size", ThemeBuilder.FONT_CAPTION)))
+			ThemeBuilder.enable_phrase_wrap(bbcode_label)
+			_body.add_child(bbcode_label)
 			if desc != "":
-				_body.add_child(ThemeBuilder.wrap_label(desc, ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM))
+				_body.add_child(_phrase_desc_label(desc))
 			continue
 		# 自定义行节点（图标战利品行等）：调用方组装好控件整行塞入。
 		# 必须 SHRINK_BEGIN：BoxContainer 子节点默认 FILL 会被垂直均分，
@@ -152,7 +155,7 @@ func show_info(title_text: String, rows: Array,
 		_body.add_child(item)
 		item.add_child(ThemeBuilder.wrap_label(text_value, 14, color))
 		if desc != "":
-			item.add_child(ThemeBuilder.wrap_label(desc, ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM))
+			item.add_child(_phrase_desc_label(desc))
 	# 动态行/按钮补挂触控约定（PASS + 14px 滑动守卫）
 	ThemeBuilder.prepare_touch(_body)
 	_present()
@@ -242,7 +245,8 @@ func _show_detail_view(detail: Dictionary) -> void:
 		key_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		line.add_child(key_label)
 		var value_color: Color = row.get("color", ThemeBuilder.COLOR_TEXT_PRIMARY)
-		var value_label := ThemeBuilder.wrap_label(String(row.get("value", "")),
+		var value_text := String(row.get("value", ""))
+		var value_label := ThemeBuilder.wrap_label_phrases(value_text,
 			ThemeBuilder.FONT_BODY_SUB, value_color)
 		value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -590,6 +594,16 @@ func _on_scrim_gui_input(event: InputEvent) -> void:
 		hide_sheet()
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		hide_sheet()
+
+
+## 说明正文：结构化属性 / 掉落行走防断词，长攻略仍用普通按词折行
+func _phrase_desc_label(text_value: String) -> Label:
+	var structured := ThemeBuilder.is_structured_line(text_value)
+	var node := ThemeBuilder.wrap_label_phrases(text_value, ThemeBuilder.FONT_CAPTION,
+		ThemeBuilder.COLOR_TEXT_DIM) if structured \
+		else ThemeBuilder.wrap_label(text_value, ThemeBuilder.FONT_CAPTION,
+			ThemeBuilder.COLOR_TEXT_DIM)
+	return node
 
 
 func _clear(node: Node) -> void:

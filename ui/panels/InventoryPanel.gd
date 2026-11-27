@@ -36,6 +36,18 @@ var _selected_item_id: String = ""
 ## -1 表示非品质化物品；0/1/2 对应凡品/精良/极品，仅用于 UI 选中态
 var _selected_quality: int = -1
 var _grid_buttons: Dictionary = {}
+## 已落屏的键序列 / 数量快照：后台产出只改数量时走「零节点重建」快路径
+var _displayed_keys: Array[String] = []
+var _displayed_counts: Dictionary = {}
+var _pending_keys: Array[String] = []
+var _pending_counts: Dictionary = {}
+## 增删格子时记录滚动位置，补建完成后恢复（仅数量变化时完全不动滚动）
+var _pending_scroll_restore: int = -1
+## 上次过滤 key：只有切过滤才清空旧格子，库存增量不摘节点避免闪白
+var _last_filter: String = ""
+var _action_row_sig: String = ""
+## 首轮构建完成前禁用快路径（否则空包首帧不会显示空态）
+var _display_ready: bool = false
 var _layout_mode: int = EventBus.LayoutMode.COMPACT
 var _rebuild_queued: bool = false
 var _detail_queued: bool = false
@@ -286,38 +298,74 @@ func _on_visibility_changed() -> void:
 func rebuild() -> void:
 	if _list_box == null:
 		return
-	_clear(_list_box)
-	_grid_buttons.clear()
+	# 上一轮分帧补建未完成：只记账，完成后再整体刷新。
+	# 否则高频库存信号会把补建反复打回起点（挂机产物每秒都在变）。
+	if not _build_entries.is_empty():
+		_rebuild_pending = true
+		return
 
 	var entries: Array = []
 	for key in DataRegistry.items.keys():
 		var item := DataRegistry.get_item(String(key))
 		if item == null or not _match_filter(item):
 			continue
+		# 品阶在收集阶段算一次：排序比较器只读预计算字段，避免 O(n log n) 次全表扫描
+		var grade_info := DataRegistry.get_material_grade(item.id)
+		var has_grade := not grade_info.is_empty()
+		var grade_tier := int(grade_info.get("tier", 0))
+		var grade_unlock := int(grade_info.get("unlock_level", 0))
 		if item.category == ItemData.Category.EQUIPMENT:
 			for quality in [2, 1, 0]:
 				var q := int(quality)
 				var q_count := GameState.get_quality_count(item.id, q)
 				if q_count > 0:
-					entries.append({"item": item, "quality": q, "count": q_count})
+					entries.append({"item": item, "quality": q, "count": q_count,
+						"has_grade": has_grade, "tier": grade_tier, "unlock": grade_unlock})
 		else:
 			var stack_count := GameState.get_item_count(item.id)
 			if stack_count > 0:
-				entries.append({"item": item, "quality": -1, "count": stack_count})
+				entries.append({"item": item, "quality": -1, "count": stack_count,
+					"has_grade": has_grade, "tier": grade_tier, "unlock": grade_unlock})
 	var total_stacks := entries.size()
 	entries.sort_custom(_entry_less)
-	_count_label.text = "共 %d 种" % total_stacks
+	var count_text := "共 %d 种" % total_stacks
+	if _count_label.text != count_text:
+		_count_label.text = count_text
+
+	var keys: Array[String] = []
+	var counts: Dictionary = {}
+	for entry_value in entries:
+		var entry: Dictionary = entry_value
+		var cell_key := _cell_key(String((entry["item"] as ItemData).id), int(entry["quality"]))
+		keys.append(cell_key)
+		counts[cell_key] = int(entry["count"])
+
+	# 快路径：键序列完全一致（后台三槽绝大多数掉落只增加数量）——
+	# 不摘节点、不重建、不重置滚动，只改变动格子的数量文本。
+	if _display_ready and keys == _displayed_keys and _grid_ready_for(keys):
+		if _apply_incremental_counts(entries, counts):
+			_refresh_action_row()
+		return
+
 	_refresh_action_row()
 	_apply_width(EventBus.workspace_width)
 
 	if entries.is_empty():
+		var already_empty := _empty_state != null and _empty_state.visible
+		_display_ready = true
+		_displayed_keys = []
+		_displayed_counts.clear()
+		_pending_keys = []
+		_pending_counts.clear()
+		_pending_scroll_restore = -1
 		_selected_item_id = ""
 		_selected_quality = -1
 		if _list_scroll != null:
 			_list_scroll.visible = false
 		if _empty_state != null:
 			_empty_state.visible = true
-		_queue_detail_refresh()
+		if not already_empty:
+			_queue_detail_refresh()
 		return
 
 	if _list_scroll != null:
@@ -336,24 +384,191 @@ func rebuild() -> void:
 		var first: Dictionary = entries[0]
 		_selected_item_id = String((first["item"] as ItemData).id)
 		_selected_quality = int(first["quality"])
-	for entry_value in entries:
-		var entry: Dictionary = entry_value
+
+	# 按 key 复用已建格子，并按小批分帧补建：首帧只建 BUILD_CHUNK 个，
+	# 余下每帧继续，杜绝 170 格 × 图标在同帧一次性构建造成的半秒卡顿。
+	_build_gen += 1
+	var gen := _build_gen
+	_build_cursor = 0
+	_build_entries = entries
+	_build_prev = _grid_buttons.duplicate()
+	_build_next = {}
+	# 只有切过滤这种「整集合语义变化」才先摘掉旧格子、回到顶部；
+	# 库存新增 / 耗尽沿用旧节点就地重排，并恢复用户原滚动位置。
+	var filter_changed := _filter != _last_filter
+	_last_filter = _filter
+	_pending_scroll_restore = 0 if filter_changed else _current_scroll_offset()
+	_pending_keys = keys.duplicate()
+	_pending_counts = counts.duplicate()
+	if filter_changed:
+		for old_key in _build_prev.keys():
+			var old_node: Variant = _build_prev[old_key]
+			if old_node is Node and (old_node as Node).get_parent() == _list_box:
+				_list_box.remove_child(old_node as Node)
+	if _build_step(gen):
+		_finish_cell_build(gen)
+	else:
+		_drive_cell_build(gen)
+
+
+## 分帧补建：每帧最多 BUILD_CHUNK 个格子（含网格重排，单帧预算约 8~10ms）
+const BUILD_CHUNK: int = 3
+var _build_gen: int = 0
+var _build_cursor: int = 0
+var _build_entries: Array = []
+var _build_prev: Dictionary = {}
+var _build_next: Dictionary = {}
+var _rebuild_pending: bool = false
+
+
+func _build_step(gen: int) -> bool:
+	if gen != _build_gen or _list_box == null:
+		return true
+	var target := mini(_build_cursor + BUILD_CHUNK, _build_entries.size())
+	while _build_cursor < target:
+		var entry: Dictionary = _build_entries[_build_cursor]
 		var entry_item: ItemData = entry["item"] as ItemData
 		var entry_quality := int(entry["quality"])
-		var button := _build_item_cell(entry_item, entry_quality, int(entry["count"]))
-		_list_box.add_child(button)
-		_grid_buttons[_cell_key(entry_item.id, entry_quality)] = button
+		var entry_count := int(entry["count"])
+		var cell_key := _cell_key(entry_item.id, entry_quality)
+		var button: Button = _build_prev.get(cell_key, null)
+		if button != null and not is_instance_valid(button):
+			button = null
+		if button == null:
+			button = _build_item_cell(entry_item, entry_quality, entry_count)
+		else:
+			_refresh_item_cell(button, entry_item, entry_quality, entry_count)
+		if button.get_parent() != _list_box:
+			if button.get_parent() != null:
+				button.get_parent().remove_child(button)
+			_list_box.add_child(button)
+			# 新挂入的格子补一次触控约定（按钮 PASS + 滑动守卫）
+			ThemeBuilder.prepare_touch(button)
+		_list_box.move_child(button, _build_cursor)
+		_build_next[cell_key] = button
+		_grid_buttons[cell_key] = button
+		_build_cursor += 1
+	return _build_cursor >= _build_entries.size()
+
+
+func _drive_cell_build(gen: int) -> void:
+	while gen == _build_gen and is_inside_tree():
+		# 切走后暂停补建，切回再续：后台补建不与当前页抢帧
+		if not is_visible_in_tree():
+			await visibility_changed
+			continue
+		await get_tree().process_frame
+		if gen != _build_gen or not is_inside_tree():
+			return
+		if _build_step(gen):
+			_finish_cell_build(gen)
+			return
+
+
+func _finish_cell_build(gen: int) -> void:
+	if gen != _build_gen:
+		return
+	# 释放上一轮遗留（本页已不存在的格子）
+	for old_key in _build_prev.keys():
+		if _build_next.has(old_key):
+			continue
+		var stale: Button = _build_prev[old_key]
+		if stale != null and is_instance_valid(stale):
+			if stale.get_parent() != null:
+				stale.get_parent().remove_child(stale)
+			stale.queue_free()
+		if _grid_buttons.get(old_key, null) == stale:
+			_grid_buttons.erase(old_key)
+	_build_entries = []
+	_build_prev = {}
+	_display_ready = true
+	_displayed_keys = _pending_keys.duplicate()
+	_displayed_counts = _pending_counts.duplicate()
+	_pending_keys = []
+	_pending_counts = {}
 	_refresh_grid_selection()
 	# 详情卡与网格刷新合并到帧末执行：同一帧多次状态变化只重建一次详情卡
 	_queue_detail_refresh()
 	call_deferred("_sync_cell_size")
+	_restore_scroll_after_build()
+	if _rebuild_pending:
+		_rebuild_pending = false
+		call_deferred("rebuild")
 
 
-
-	# 动态重建后补挂触控约定（按钮 PASS + 14px 滑动守卫）
-	ThemeBuilder.prepare_touch(_list_box)
 func _cell_key(item_id: String, quality: int) -> String:
 	return item_id if quality < 0 else "%s|q%d" % [item_id, quality]
+
+
+## 屏幕上的格子是否已完整覆盖给定键集合（补建/切换过滤期间为 false）
+func _grid_ready_for(keys: Array[String]) -> bool:
+	if _grid_buttons.size() != keys.size():
+		return false
+	for key in keys:
+		var node: Variant = _grid_buttons.get(key, null)
+		if node == null or not is_instance_valid(node):
+			return false
+	return true
+
+
+## 只数量变化的增量刷新：不摘节点、不重建、不动滚动；返回是否真的有数量变化
+func _apply_incremental_counts(entries: Array, counts: Dictionary) -> bool:
+	var any_changed := false
+	var selected_changed := false
+	var selected_key := _cell_key(_selected_item_id, _selected_quality)
+	for entry_value in entries:
+		var entry: Dictionary = entry_value
+		var item: ItemData = entry["item"] as ItemData
+		var quality := int(entry["quality"])
+		var cell_key := _cell_key(item.id, quality)
+		var count := int(entry["count"])
+		if int(_displayed_counts.get(cell_key, -1)) == count:
+			continue
+		any_changed = true
+		var button: Button = _grid_buttons.get(cell_key, null)
+		if button != null and is_instance_valid(button):
+			_update_cell_count(button, item, quality, count)
+		if cell_key == selected_key:
+			selected_changed = true
+	_displayed_counts = counts.duplicate()
+	if selected_changed:
+		_queue_detail_refresh()
+	return any_changed
+
+
+## 就地改写数量与 tooltip，不触碰样式 / 图标 / 角标
+func _update_cell_count(button: Button, item: ItemData, quality: int, count: int) -> void:
+	var quality_suffix := "" if quality < 0 else "（%s）" % GameState.get_quality_name(quality)
+	button.tooltip_text = "%s%s ×%s" % [item.display_name, quality_suffix,
+		GameFormulas.format_num(float(count))]
+	var count_label: Variant = button.get_meta("cell_count_label", null)
+	if count_label is Label:
+		(count_label as Label).text = "×%s" % GameFormulas.format_num(float(count))
+
+
+## 当前实际滚动的容器（COMPACT 整页滚动 / 宽屏右侧列表）
+func _current_scroll_offset() -> int:
+	if _page_scroll != null and _page_scroll.visible:
+		return _page_scroll.scroll_vertical
+	if _list_scroll != null:
+		return _list_scroll.scroll_vertical
+	return 0
+
+
+## 增删格子后恢复滚动位置：等布局更新一帧，再写回（越界由 ScrollContainer 自动收口）
+func _restore_scroll_after_build() -> void:
+	if _pending_scroll_restore < 0:
+		return
+	var target := _pending_scroll_restore
+	_pending_scroll_restore = -1
+	await get_tree().process_frame
+	if not is_inside_tree():
+		return
+	var scroll := _page_scroll if _page_scroll != null and _page_scroll.visible else _list_scroll
+	if scroll == null:
+		return
+	# 取「记录位置」与「当前用户位置」的较大值：补建期间玩家继续下滑不会被旧位置拽回
+	scroll.scroll_vertical = maxi(target, scroll.scroll_vertical)
 
 
 func _entry_less(a: Dictionary, b: Dictionary) -> bool:
@@ -361,13 +576,11 @@ func _entry_less(a: Dictionary, b: Dictionary) -> bool:
 	var ib: ItemData = b["item"] as ItemData
 	if ia.category != ib.category:
 		return ia.category < ib.category
-	var ga: Dictionary = DataRegistry.get_material_grade(ia.id)
-	var gb: Dictionary = DataRegistry.get_material_grade(ib.id)
-	if not ga.is_empty() and not gb.is_empty():
-		if int(ga["tier"]) != int(gb["tier"]):
-			return int(ga["tier"]) > int(gb["tier"])
-		if int(ga["unlock_level"]) != int(gb["unlock_level"]):
-			return int(ga["unlock_level"]) > int(gb["unlock_level"])
+	if bool(a.get("has_grade", false)) and bool(b.get("has_grade", false)):
+		if int(a["tier"]) != int(b["tier"]):
+			return int(a["tier"]) > int(b["tier"])
+		if int(a["unlock"]) != int(b["unlock"]):
+			return int(a["unlock"]) > int(b["unlock"])
 	if ia.id == ib.id:
 		return int(a["quality"]) > int(b["quality"])
 	return ia.id < ib.id
@@ -434,6 +647,8 @@ func _build_item_cell(item: ItemData, quality: int = -1, stack_count: int = -1) 
 	count_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	count_plate.add_child(count_label)
 	button.add_child(count_plate)
+	# 池化复用：数量文本单独留引用，重建时原地改写
+	button.set_meta("cell_count_label", count_label)
 
 	var badge := _make_quality_badge(quality) if quality >= 0 else _make_grade_badge(item.id)
 	if badge != null:
@@ -443,6 +658,24 @@ func _build_item_cell(item: ItemData, quality: int = -1, stack_count: int = -1) 
 
 	button.pressed.connect(func() -> void: _select_item(item.id, quality))
 	return button
+
+
+## 复用格子：只刷新数量、提示、选中态与「装」角标；图标与品阶印沿用原节点
+func _refresh_item_cell(button: Button, item: ItemData, quality: int, count: int) -> void:
+	var quality_suffix := "" if quality < 0 else "（%s）" % GameState.get_quality_name(quality)
+	button.tooltip_text = "%s%s ×%s" % [item.display_name, quality_suffix,
+		GameFormulas.format_num(float(count))]
+	var count_label: Variant = button.get_meta("cell_count_label", null)
+	if count_label is Label:
+		(count_label as Label).text = "×%s" % GameFormulas.format_num(float(count))
+	_apply_cell_style(button, _cell_key(item.id, quality) == _cell_key(
+		_selected_item_id, _selected_quality), quality)
+	var equipped_now := _is_equipped_item(item, quality)
+	var equipped_badge: Node = button.get_node_or_null("EquippedSeal")
+	if equipped_now and equipped_badge == null:
+		button.add_child(_make_equipped_badge())
+	elif not equipped_now and equipped_badge != null:
+		equipped_badge.queue_free()
 
 
 ## 左上角品阶微印：文字首字直接取 DataRegistry 品阶名，禁止另写阶位表
@@ -1281,9 +1514,16 @@ func _collect_smeltable(include_fine: bool) -> Array:
 func _refresh_action_row() -> void:
 	if _dissolve_button == null or _smelt_button == null:
 		return
-	_style_batch_button(_dissolve_button, not _collect_dissolvable(false).is_empty(),
+	var can_dissolve := not _collect_dissolvable(false).is_empty()
+	var can_smelt := not _collect_smeltable(false).is_empty()
+	# 就绪态没变时不再重复分配 8+ 个 StyleBox（后台每次掉落都会走到这里）
+	var sig := "%s|%s" % [str(can_dissolve), str(can_smelt)]
+	if sig == _action_row_sig:
+		return
+	_action_row_sig = sig
+	_style_batch_button(_dissolve_button, can_dissolve,
 		"把落后当前境界的旧木材矿石折算成灵石", "暂无过时低阶材料")
-	_style_batch_button(_smelt_button, not _collect_smeltable(false).is_empty(),
+	_style_batch_button(_smelt_button, can_smelt,
 		"把落后当前境界的闲置装备熔炼成材料或灵石", "暂无可熔炼的淘汰装备")
 
 

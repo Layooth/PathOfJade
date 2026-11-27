@@ -12,7 +12,7 @@ config_version=5
 
 config/name="PathOfJade"
 config/description="《玉简问道》东方修仙题材增量挂机放置游戏（移动端竖屏优先）"
-config/version="0.0.4beta"
+config/version="1.0.1"
 run/main_scene="res://ui/BootScene.tscn"
 config/use_custom_user_dir=true
 config/custom_user_dir_name="Jade Codex"

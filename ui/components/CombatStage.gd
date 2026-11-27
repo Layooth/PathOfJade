@@ -264,6 +264,8 @@ func _on_combat_stopped(_reason: String) -> void:
 
 
 func _on_stats_changed() -> void:
+	if not is_visible_in_tree():
+		return
 	if not CombatEngine.is_active():
 		refresh_idle()
 
@@ -271,6 +273,7 @@ func _on_stats_changed() -> void:
 ## 页面切换：可见且未开战时刷新静候态；隐藏时终止在播 Tween，避免后台空转
 func _on_visibility_changed() -> void:
 	if is_visible_in_tree():
+		_refresh_player_icon()
 		if not CombatEngine.is_active():
 			refresh_idle()
 		return
@@ -330,6 +333,9 @@ func _on_enemy_changed(enemy_id: String, first_spawn: bool) -> void:
 func _on_state_updated(payload: Dictionary) -> void:
 	# 模式过滤：非本模式战斗的信号一律不进舞台（防秘境/镇魔塔串扰）
 	if not _mode_ok():
+		return
+	# 隐藏页不写任何演出节点（战斗可在后台继续，回来后再同步）
+	if not is_visible_in_tree():
 		return
 	var player_max := maxf(1.0, float(payload.get("max_hp", 1)))
 	var enemy_max := maxf(1.0, float(payload.get("enemy_max", 1)))
@@ -426,6 +432,8 @@ func _on_enemy_defeated(_enemy_id: String, _loot: Dictionary) -> void:
 
 
 func _refresh_player_icon() -> void:
+	if not is_visible_in_tree():
+		return
 	var realm := GameState.get_realm()
 	# 立绘跟随武器，名称固定显示当前境界（如「炼气一层」）
 	_player_name.text = realm.display_name if realm != null else "修士"

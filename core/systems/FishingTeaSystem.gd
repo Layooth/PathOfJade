@@ -21,6 +21,15 @@ const NINGSHEN_HERBS: Array[String] = [
 	"item_hundun_flower", "item_hongmeng_herb",
 ]
 const RARE_SEEDS: Array[String] = ["seed_taiyi", "seed_longxue", "seed_hundun", "seed_hongmeng"]
+## 五档灵鱼生态：境界门槛（realm_order）与鱼区内权重（合计 95，确保稀有不上头）
+const FISH_REALM_GATES: Dictionary = {
+	"item_qingwen_fish": 18, "item_spirit_fish": 18, "item_chilin_fish": 21,
+	"item_hantan_eel": 23, "item_jinsui_dragonfish": 25,
+}
+const FISH_WEIGHTS: Dictionary = {
+	"item_qingwen_fish": 40, "item_spirit_fish": 30, "item_chilin_fish": 16,
+	"item_hantan_eel": 7, "item_jinsui_dragonfish": 2,
+}
 
 ## 灵鱼养神汤旧 ID 保持兼容，fish_soup 只作为外部别名。
 const TEA_ALIASES: Dictionary = {"fish_soup": "lingyu_tea"}
@@ -59,6 +68,25 @@ const TEAS: Dictionary = {
 		"bonus_key": "skill_gain", "bonus": 0.12,
 		"mastery_bonus": 0.12, "action_interval": -0.05,
 	},
+	"chilin_tea": {
+		"name": "赤鳞斗战茶",
+		"icon": "tea_crimson_battle", "min_realm": 21,
+		"dew": 3, "fish_id": "item_chilin_fish", "fish": 1,
+		"herb_id": "item_chiyan", "herb_count": 6,
+		"herbs": ["item_chiyan"],
+		"effect": "会心率 +6%",
+		"bonus_key": "crit_chance", "bonus": 0.06,
+	},
+	"xianming_tea": {
+		"name": "寒髓金髓仙茗",
+		"icon": "tea_immortal_marrow", "min_realm": 24,
+		"dew": 4, "fish_id": "item_hantan_eel", "fish": 1,
+		"herb_id": "item_jinsui_dragonfish", "herb_count": 1,
+		"herbs": ["item_jinsui_dragonfish"],
+		"effect": "全百艺双倍 +5% · 动作耗时 -6%",
+		"bonus_key": "double_chance", "bonus": 0.05,
+		"action_interval": -0.06,
+	},
 }
 
 
@@ -74,6 +102,7 @@ static func default_state() -> Dictionary:
 		"tea_expire_unix": 0,
 		"brewed_teas": [],
 		"pity_dew_count": 0,
+		"pity_gold_count": 0,
 		"pending_tea_id": "",
 		"pending_tea_ready_unix": 0,
 		"recent_logs": [],
@@ -106,6 +135,7 @@ static func get_state() -> Dictionary:
 	state["brewed_teas"] = brewed
 	state["pity_dew_count"] = clampi(int(saved.get("pity_dew_count", 0)), 0, 9)
 	var pending_id := normalize_tea_id(str(saved.get("pending_tea_id", "")))
+	state["pity_gold_count"] = clampi(int(saved.get("pity_gold_count", 0)), 0, 9)
 	state["pending_tea_id"] = pending_id if TEAS.has(pending_id) else ""
 	state["pending_tea_ready_unix"] = maxi(0, int(saved.get("pending_tea_ready_unix", 0)))
 	var logs: Array = []
@@ -324,20 +354,30 @@ static func _process_rods(state: Dictionary, rods: int) -> Dictionary:
 	var gained: Dictionary = {}
 	var pool_gains: Dictionary = {}
 	var pity := clampi(int(state.get("pity_dew_count", 0)), 0, 9)
+	# 十竿保底池：连续 9 竿未得金髓龙鱼，第 10 竿必入鱼区并保底出金髓
+	var gold_pity := clampi(int(state.get("pity_gold_count", 0)), 0, 9)
 	for _i in range(rods):
+		var gold_before := int(gained.get("item_jinsui_dragonfish", 0))
+		var forced_gold := gold_pity >= 9 and _fish_unlocked("item_jinsui_dragonfish")
 		var forced_surprise := pity >= 9
 		var roll := randi() % 100
-		if forced_surprise:
+		if forced_gold:
+			roll = 32 + randi() % 20
+		elif forced_surprise:
 			roll = 32 + randi() % 68
 		if roll < 32:
 			_gain_item(gained, "item_spirit_dew", 1)
 			_add_log(state, "灵潭收竿：灵潭清露 ×1", false, "plain")
 			pity = mini(9, pity + 1)
+			gold_pity = mini(9, gold_pity + 1)
 			continue
 		pity = 0
 		if roll < 52:
-			_gain_item(gained, "item_spirit_fish", 1)
-			_add_log(state, "灵潭收竿：碧波灵鱼 ×1", false, "jade")
+			var fish_id := _roll_fish(forced_gold)
+			_gain_item(gained, fish_id, 1)
+			var is_gold := fish_id == "item_jinsui_dragonfish"
+			_add_log(state, "灵潭收竿：%s ×1" % DataRegistry.get_item_name(fish_id),
+				is_gold or fish_id == "item_hantan_eel", "gold" if is_gold else "jade")
 		elif roll < 68:
 			var amount := _reward_amount(25, 55)
 			_gain_item(gained, DataRegistry.SPIRIT_STONE, amount)
@@ -363,8 +403,44 @@ static func _process_rods(state: Dictionary, rods: int) -> Dictionary:
 				true, "gold")
 		else:
 			_gain_grand_discovery(state, gained, pool_gains)
+		# 十竿保底计数：本轮出金髓即清零，否则 +1（清露分支已自行累计后 continue）
+		if int(gained.get("item_jinsui_dragonfish", 0)) > gold_before:
+			gold_pity = 0
+		else:
+			gold_pity = mini(9, gold_pity + 1)
 	state["pity_dew_count"] = pity
-	return {"items": gained, "pool": pool_gains, "rods": rods, "pity": pity}
+	state["pity_gold_count"] = gold_pity
+	return {"items": gained, "pool": pool_gains, "rods": rods,
+		"pity": pity, "gold_pity": gold_pity}
+
+
+## 灵鱼是否已按境界解锁（18 化神初期开潭，后续逐档放开）
+static func _fish_unlocked(fish_id: String) -> bool:
+	if GameState == null:
+		return false
+	return GameState.get_realm_index() >= int(FISH_REALM_GATES.get(fish_id, 18))
+
+
+## 鱼区落鱼：按权重加权随机；十竿保底时强制金髓龙鱼
+static func _roll_fish(force_gold: bool) -> String:
+	if force_gold and _fish_unlocked("item_jinsui_dragonfish"):
+		return "item_jinsui_dragonfish"
+	var pool: Array[String] = []
+	var total := 0
+	for fish_value in DataRegistry.FISH_IDS:
+		var fish_id := String(fish_value)
+		if not _fish_unlocked(fish_id):
+			continue
+		pool.append(fish_id)
+		total += int(FISH_WEIGHTS.get(fish_id, 1))
+	if pool.is_empty():
+		return "item_qingwen_fish"
+	var roll := randi() % maxi(1, total)
+	for fish_id in pool:
+		roll -= int(FISH_WEIGHTS.get(fish_id, 1))
+		if roll < 0:
+			return fish_id
+	return pool[pool.size() - 1]
 
 
 static func _reward_amount(min_value: int, max_value: int) -> int:
@@ -451,6 +527,28 @@ static func _best_herb(herbs: Array, count: int) -> String:
 	return best
 
 
+## 茶方材料总表（面板与烹煮共用单一出口）：
+## 清露 dew / 指定灵鱼 fish_id×fish（缺省碧波灵鱼）/ 草药 herb_id×herb_count
+static func get_tea_costs(tea_id: String) -> Dictionary:
+	var key := normalize_tea_id(tea_id)
+	if not TEAS.has(key):
+		return {}
+	var tea: Dictionary = TEAS[key]
+	var costs := {}
+	var dew := int(tea.get("dew", 0))
+	if dew > 0:
+		costs["item_spirit_dew"] = dew
+	var fish_count := int(tea.get("fish", 0))
+	if fish_count > 0:
+		var fish_id := str(tea.get("fish_id", "item_spirit_fish"))
+		costs[fish_id] = int(costs.get(fish_id, 0)) + fish_count
+	var herb_id := str(tea.get("herb_id", ""))
+	var herb_count := int(tea.get("herb_count", 0))
+	if herb_id != "" and herb_count > 0:
+		costs[herb_id] = int(costs.get(herb_id, 0)) + herb_count
+	return costs
+
+
 static func brew_tea(tea_id: String, _legacy_herb_id: String = "") -> Dictionary:
 	var key := normalize_tea_id(tea_id)
 	if not is_unlocked() or not TEAS.has(key):
@@ -463,21 +561,14 @@ static func brew_tea(tea_id: String, _legacy_herb_id: String = "") -> Dictionary
 	if str(state.get("pending_tea_id", "")) != "":
 		return {"ok": false, "message": "文火慢煎中，请稍候"}
 	var tea: Dictionary = TEAS[key]
-	var dew := int(tea.get("dew", 0))
-	var herb_id := str(tea.get("herb_id", ""))
-	var herb_count := int(tea.get("herb_count", 0))
-	var fish_count := int(tea.get("fish", 0))
-	if GameState.get_item_count("item_spirit_dew") < dew:
-		return {"ok": false, "message": "灵潭清露不足"}
-	if fish_count > 0 and GameState.get_item_count("item_spirit_fish") < fish_count:
-		return {"ok": false, "message": "碧波灵鱼不足"}
-	if herb_id != "" and GameState.get_item_count(herb_id) < herb_count:
-		return {"ok": false, "message": "%s不足" % DataRegistry.get_item_name(herb_id)}
-	GameState.remove_item("item_spirit_dew", dew)
-	if fish_count > 0:
-		GameState.remove_item("item_spirit_fish", fish_count)
-	if herb_id != "":
-		GameState.remove_item(herb_id, herb_count)
+	var costs := get_tea_costs(key)
+	for item_value in costs.keys():
+		var item_id := String(item_value)
+		var need := int(costs[item_value])
+		if GameState.get_item_count(item_id) < need:
+			return {"ok": false, "message": "%s不足" % DataRegistry.get_item_name(item_id)}
+	for item_value in costs.keys():
+		GameState.remove_item(String(item_value), int(costs[item_value]))
 	state["pending_tea_id"] = key
 	state["pending_tea_ready_unix"] = int(Time.get_unix_time_from_system()) + int(BREW_SECONDS)
 	commit_state(state)

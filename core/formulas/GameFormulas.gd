@@ -381,6 +381,10 @@ const CRIMSON_FRUIT_ATK: int = 2
 ## 每块已播种灵田：吐纳修为 +3%、丹道双倍 +2%
 const FARM_AURA_CULTIVATION_PER_PLOT: float = 0.03
 const FARM_AURA_ALCHEMY_PER_PLOT: float = 0.02
+## 仙壤灵脉反哺：每重 +1% 修为（20 重封顶 +20%）、每 2 重 +1% 丹道双倍（封顶 +10%）
+const FARM_SOIL_MAX_LEVEL: int = 20
+const FARM_AURA_SOIL_CULTIVATION_PER_LEVEL: float = 0.01
+const FARM_AURA_SOIL_ALCHEMY_PER_TWO_LEVELS: float = 0.01
 
 
 static func crimson_fruit_hp_bonus(eaten: int) -> int:
@@ -391,12 +395,44 @@ static func crimson_fruit_attack_bonus(eaten: int) -> int:
 	return clampi(eaten, 0, CRIMSON_FRUIT_CAP) * CRIMSON_FRUIT_ATK
 
 
-static func farm_aura_cultivation(planted: int) -> float:
+## 灵田基础反哺（与灵脉无关，炼气期开荒数值保持不变）
+static func farm_aura_plot_cultivation(planted: int) -> float:
 	return FARM_AURA_CULTIVATION_PER_PLOT * float(clampi(planted, 0, 4))
 
 
-static func farm_aura_alchemy_double(planted: int) -> float:
+static func farm_aura_plot_alchemy(planted: int) -> float:
 	return FARM_AURA_ALCHEMY_PER_PLOT * float(clampi(planted, 0, 4))
+
+
+## 灵脉自身的反哺档位（与是否有田无关，仅用于展示「这一重给了多少」）
+static func farm_soil_cultivation_pct(soil_level: int) -> float:
+	return FARM_AURA_SOIL_CULTIVATION_PER_LEVEL \
+		* float(clampi(soil_level, 0, FARM_SOIL_MAX_LEVEL))
+
+
+static func farm_soil_alchemy_pct(soil_level: int) -> float:
+	var pairs := clampi(soil_level, 0, FARM_SOIL_MAX_LEVEL) / 2
+	return FARM_AURA_SOIL_ALCHEMY_PER_TWO_LEVELS * float(pairs)
+
+
+## 灵脉加成仅在至少一块灵田已播种（灵气反哺激活）时计入
+static func farm_aura_soil_cultivation(soil_level: int, planted: int) -> float:
+	return farm_soil_cultivation_pct(soil_level) if planted > 0 else 0.0
+
+
+static func farm_aura_soil_alchemy(soil_level: int, planted: int) -> float:
+	return farm_soil_alchemy_pct(soil_level) if planted > 0 else 0.0
+
+
+## 灵气反哺总出口：基础灵田 + 灵脉（修为 32% / 丹道 18% 为 4 田 + 20 重满配）
+static func farm_aura_cultivation(planted: int, soil_level: int = 0) -> float:
+	return farm_aura_plot_cultivation(planted) \
+		+ farm_aura_soil_cultivation(soil_level, planted)
+
+
+static func farm_aura_alchemy_double(planted: int, soil_level: int = 0) -> float:
+	return farm_aura_plot_alchemy(planted) \
+		+ farm_aura_soil_alchemy(soil_level, planted)
 
 static func get_codex_bonus(bonus_key: String) -> float:
 	var total := 0.0

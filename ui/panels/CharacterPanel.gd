@@ -18,22 +18,50 @@ const SKILL_ORDER: Array = [
 ]
 
 var _scroll: ScrollContainer
-var _content: VBoxContainer
+## 竖屏为 VBox 单列；宽屏切换为 HBox 两栏容器
+var _content: BoxContainer
+var _left_col: VBoxContainer
+var _right_col: VBoxContainer
+var _overview_card: Control
+var _equipment_card: Control
+var _attribute_card: Control
+var _technique_card: Control
+var _skill_card: Control
+## 功法微卡：竖屏单列 / 宽屏 2×2，同一批控件重排不重建
+var _technique_list: GridContainer
+var _technique_cards: Array[Control] = []
+## 宽屏随身法宝紧凑尺寸（竖屏恢复 124px 立绘原样）
+var _portrait_center: CenterContainer
+var _portrait_rect: TextureRect
+var _equipment_row: HBoxContainer
+var _equipment_slot_cards: Array[PanelContainer] = []
+var _natal_slot_card: PanelContainer
+## 宽屏百艺格加高到 60px（竖屏 44px），以真实可点内容补齐右栏自然高度
+var _skill_cells: Array[PanelContainer] = []
+var _layout_wide: bool = false
 var _dirty: bool = true
 var _rebuild_queued: bool = false
 
 
 func _ready() -> void:
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	custom_minimum_size.x = 0.0
 	_build_shell()
 	_connect_refresh_signals()
+	_connect_if(EventBus, "layout_changed", Callable(self, "_on_layout_changed"))
 	visibility_changed.connect(_on_visibility_changed)
+	resized.connect(_on_self_resized)
 	ThemeBuilder.prepare_touch(self)
+	call_deferred("_fill_parent_width")
 	_queue_refresh()
 
 
 func _build_shell() -> void:
 	_scroll = ThemeBuilder.scroll_container()
 	_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# 整页只允许纵向滚动：禁止任何子节点把 ScrollContainer 横向撑宽
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.custom_minimum_size.x = 0.0
 	add_child(_scroll)
 
 	var margin := MarginContainer.new()
@@ -45,9 +73,17 @@ func _build_shell() -> void:
 	margin.add_theme_constant_override("margin_bottom", 10)
 	_scroll.add_child(margin)
 
-	_content = ThemeBuilder.vbox(10)
+	_content = BoxContainer.new()
+	_content.vertical = true
+	_content.add_theme_constant_override("separation", 10)
 	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_content.custom_minimum_size.x = 0.0
 	margin.add_child(_content)
+	_left_col = ThemeBuilder.vbox(8)
+	_right_col = ThemeBuilder.vbox(8)
+	_left_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_right_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 
 func _connect_refresh_signals() -> void:
@@ -84,6 +120,21 @@ func _on_visibility_changed() -> void:
 		_queue_refresh()
 
 
+## 宽度始终跟随父容器可用区：不再按视口手算收缩，避免右侧留白 / 滚动条内缩
+func _on_self_resized() -> void:
+	call_deferred("_fill_parent_width")
+
+
+func _fill_parent_width() -> void:
+	if not is_inside_tree():
+		return
+	var target := get_parent_area_size().x
+	if target > 0.0 and absf(size.x - target) > 0.6:
+		size.x = target
+	if _scroll != null:
+		_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+
 func _queue_refresh() -> void:
 	_dirty = true
 	if not visible or not is_inside_tree() or _rebuild_queued:
@@ -97,22 +148,161 @@ func _rebuild() -> void:
 	if not is_inside_tree() or not visible:
 		return
 	_dirty = false
+	_clear_content_cards()
+	_clear_container(_left_col)
+	_clear_container(_right_col)
+	# 构建阶段统一按竖屏顺序落到 _content，再由 _apply_layout 决定是否分栏
+	_content.vertical = true
+	_build_overview_card()
+	_overview_card = _content.get_child(_content.get_child_count() - 1)
+	_build_equipment_card()
+	_equipment_card = _content.get_child(_content.get_child_count() - 1)
+	_build_attribute_card()
+	_attribute_card = _content.get_child(_content.get_child_count() - 1)
+	_build_technique_card()
+	_technique_card = _content.get_child(_content.get_child_count() - 1)
+	_build_skill_card()
+	_skill_card = _content.get_child(_content.get_child_count() - 1)
+	_apply_layout(EventBus.workspace_width)
+	ThemeBuilder.prepare_touch(self)
+
+
+## 只清卡片，不销毁可复用的双栏容器
+func _clear_content_cards() -> void:
 	for child in _content.get_children():
+		if child == _left_col or child == _right_col:
+			continue
 		_content.remove_child(child)
 		child.queue_free()
 
-	_build_overview_card()
-	_build_equipment_card()
-	_build_attribute_card()
-	_build_technique_card()
-	_build_skill_card()
-	ThemeBuilder.prepare_touch(self)
+
+func _clear_container(node: Node) -> void:
+	if node == null:
+		return
+	for child in node.get_children():
+		node.remove_child(child)
+		child.queue_free()
+
+
+func _on_layout_changed(_mode: int, _vp: Vector2, workspace: float) -> void:
+	_apply_layout(workspace)
+
+
+## 宽屏（>=840）拆成 46% / 54% 等高双栏；竖屏恢复原单列顺序
+func _apply_layout(workspace: float) -> void:
+	if _content == null:
+		return
+	var wide := workspace >= 840.0
+	_layout_wide = wide
+	_content.vertical = not wide
+	_content.size_flags_vertical = Control.SIZE_EXPAND_FILL if not wide \
+		else Control.SIZE_SHRINK_BEGIN
+	if not wide:
+		_apply_technique_columns(1)
+		_apply_equipment_compact(false)
+		_apply_skill_cells(false)
+		_reset_wide_stretch()
+		_stack_nodes(_content, [_overview_card, _equipment_card,
+			_attribute_card, _technique_card, _skill_card])
+		if _left_col.get_parent() == _content:
+			_content.remove_child(_left_col)
+		if _right_col.get_parent() == _content:
+			_content.remove_child(_right_col)
+		return
+	if _left_col.get_parent() != _content:
+		_content.add_child(_left_col)
+	if _right_col.get_parent() != _content:
+		_content.add_child(_right_col)
+	_stack_nodes(_left_col, [_overview_card, _equipment_card, _technique_card])
+	_stack_nodes(_right_col, [_attribute_card, _skill_card])
+	_left_col.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_right_col.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	_left_col.size_flags_stretch_ratio = 0.46
+	_right_col.size_flags_stretch_ratio = 0.54
+	# 功法微卡宽屏 2×2：靠压缩内容让两栏自然齐平，不再拉伸底卡留白
+	_apply_technique_columns(2)
+	_apply_equipment_compact(true)
+	_apply_skill_cells(true)
+	_reset_wide_stretch()
+
+
+func _reset_wide_stretch() -> void:
+	for card in [_technique_card, _skill_card]:
+		if card != null:
+			card.size_flags_vertical = Control.SIZE_FILL
+
+
+## 功法微卡重排：同一批节点在 1 列 / 2 列间切换，不重建也不残留
+func _apply_technique_columns(columns: int) -> void:
+	if _technique_list == null:
+		return
+	var wide := columns > 1
+	_technique_list.columns = maxi(1, columns)
+	_technique_list.add_theme_constant_override("h_separation", 6)
+	_technique_list.add_theme_constant_override("v_separation", 6 if wide else 10)
+	for index in range(_technique_cards.size()):
+		var card := _technique_cards[index]
+		if card == null or not is_instance_valid(card):
+			continue
+		if card.get_parent() != _technique_list:
+			card.reparent(_technique_list, false)
+		_technique_list.move_child(card, index)
+		if card.has_meta("technique_inner"):
+			var inner_value: Variant = card.get_meta("technique_inner")
+			var inner := inner_value as Control
+			if inner != null:
+				inner.add_theme_constant_override("separation", 1 if wide else 3)
+		card.add_theme_stylebox_override("panel", ThemeBuilder.panel_box(
+			ThemeBuilder.COLOR_CARD_DEEP, ThemeBuilder.COLOR_BORDER,
+			8, 1, 3 if wide else 6))
+
+
+func _apply_skill_cells(wide: bool) -> void:
+	for cell in _skill_cells:
+		if cell != null and is_instance_valid(cell):
+			cell.custom_minimum_size.y = 60.0 if wide else 44.0
+
+
+## 宽屏立绘 / 装备槽收紧到 96px（竖屏 124px 原样），不牺牲图标辨识度
+func _apply_equipment_compact(wide: bool) -> void:
+	# 竖屏立绘收至 76px、栏距 6px，左右法宝卡获得更多可用宽度
+	var size := 96 if wide else 76
+	if _equipment_row != null and is_instance_valid(_equipment_row):
+		_equipment_row.add_theme_constant_override("separation", 8 if wide else 6)
+	if _portrait_center != null and is_instance_valid(_portrait_center):
+		_portrait_center.custom_minimum_size = Vector2(size, size)
+	if _portrait_rect != null and is_instance_valid(_portrait_rect):
+		_portrait_rect.custom_minimum_size = Vector2(size, size)
+		_portrait_rect.size = Vector2(size, size)
+	for slot in _equipment_slot_cards:
+		if slot != null and is_instance_valid(slot):
+			slot.custom_minimum_size.x = 0.0
+			slot.custom_minimum_size.y = float(size)
+			# 竖屏再收内边距，抵消 1.20 字档的副文本宽度
+			slot.add_theme_stylebox_override("panel", ThemeBuilder.panel_box(
+				ThemeBuilder.COLOR_CARD_DEEP, ThemeBuilder.COLOR_BORDER,
+				8, 1, 5 if not wide else 8))
+	if _natal_slot_card != null and is_instance_valid(_natal_slot_card):
+		_natal_slot_card.custom_minimum_size.y = 48.0 if wide else 56.0
+
+
+func _stack_nodes(target: Control, nodes: Array) -> void:
+	if target == null:
+		return
+	for index in range(nodes.size()):
+		var node: Control = nodes[index]
+		if node == null:
+			continue
+		if node.get_parent() != target:
+			node.reparent(target, false)
+		target.move_child(node, index)
 
 
 func _new_card() -> VBoxContainer:
 	var card := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD,
 		ThemeBuilder.COLOR_BORDER, 10, 10)
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.custom_minimum_size.x = 0.0
 	_content.add_child(card)
 	var box := ThemeBuilder.vbox(8)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -152,7 +342,10 @@ func _build_overview_card() -> void:
 	badge_flow.add_theme_constant_override("v_separation", 4)
 	badge_flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.add_child(badge_flow)
-	badge_flow.add_child(ThemeBuilder.chip(_realm_stage_text(), ThemeBuilder.COLOR_AMBER))
+	var current_realm := GameState.get_realm()
+	var realm_tier := 0 if current_realm == null else current_realm.tier
+	badge_flow.add_child(ThemeBuilder.chip(_realm_stage_text(),
+		ThemeBuilder.realm_tier_color(realm_tier)))
 	var root_badge := ThemeBuilder.chip(SpiritRootSystem.get_badge_text(), ThemeBuilder.COLOR_JADE)
 	root_badge.tooltip_text = "前往灵根洗髓"
 	ThemeBuilder.make_card_tappable(root_badge, Callable(self, "_open_page").bind("spirit_root"))
@@ -262,7 +455,7 @@ func _add_stat_cell(grid: GridContainer, title: String, value: String) -> void:
 	var title_label := ThemeBuilder.label(title, ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_SECONDARY)
 	ThemeBuilder.apply_font_size(title_label, ThemeBuilder.FONT_CAPTION)
-	title_label.custom_minimum_size = Vector2(56, 0)
+	title_label.custom_minimum_size = Vector2(36, 0)
 	title_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	row.add_child(title_label)
 	var value_label := ThemeBuilder.label(value, ThemeBuilder.FONT_CAPTION,
@@ -320,9 +513,14 @@ func _build_equipment_card() -> void:
 		ThemeBuilder.FONT_CARD_TITLE, ThemeBuilder.COLOR_TEXT_TITLE_GOLD))
 	var row := ThemeBuilder.hbox(8)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.custom_minimum_size.x = 0.0
+	_equipment_row = row
 	box.add_child(row)
 
-	row.add_child(_build_equipment_slot("weapon", "主兵", "未佩兵刃", "slot_weapon"))
+	_equipment_slot_cards.clear()
+	var weapon_slot := _build_equipment_slot("weapon", "主兵", "未佩兵刃", "slot_weapon")
+	_equipment_slot_cards.append(weapon_slot)
+	row.add_child(weapon_slot)
 
 	var center := CenterContainer.new()
 	center.custom_minimum_size = Vector2(PORTRAIT_SIZE, PORTRAIT_SIZE)
@@ -336,10 +534,15 @@ func _build_equipment_card() -> void:
 	portrait.custom_minimum_size = Vector2(PORTRAIT_SIZE, PORTRAIT_SIZE)
 	portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(portrait)
+	_portrait_center = center
+	_portrait_rect = portrait
 	row.add_child(center)
 
-	row.add_child(_build_equipment_slot("armor", "护身", "未着法衣", "slot_armor"))
-	box.add_child(_build_natal_slot_card())
+	var armor_slot := _build_equipment_slot("armor", "护身", "未着法衣", "slot_armor")
+	_equipment_slot_cards.append(armor_slot)
+	row.add_child(armor_slot)
+	_natal_slot_card = _build_natal_slot_card()
+	box.add_child(_natal_slot_card)
 
 
 func _build_equipment_slot(slot: String, slot_name: String, empty_text: String,
@@ -349,6 +552,7 @@ func _build_equipment_slot(slot: String, slot_name: String, empty_text: String,
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card.size_flags_vertical = Control.SIZE_FILL
 	card.custom_minimum_size = Vector2(0, PORTRAIT_SIZE)
+	card.clip_contents = true
 
 	var center := VBoxContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -364,18 +568,15 @@ func _build_equipment_slot(slot: String, slot_name: String, empty_text: String,
 	var texture: Texture2D
 	var accent := ThemeBuilder.COLOR_JADE
 	var name_text := empty_text
-	var detail_text := "前往行囊"
+	var detail_top := "前往行囊"
+	var detail_bottom := ""
 	if item != null:
 		texture = IconLibrary.get_item_icon(item.id, quality)
 		accent = _quality_color(quality)
 		name_text = item.display_name
-		detail_text = GameState.get_quality_name(quality)
-		if temper_level >= GameState.MAX_TEMPER_LEVEL:
-			detail_text += " · 祭炼 %d / %d 重 · 已圆满" % [
-				temper_level, GameState.MAX_TEMPER_LEVEL]
-		elif temper_level > 0:
-			detail_text += " · 祭炼 %d / %d 重" % [
-				temper_level, GameState.MAX_TEMPER_LEVEL]
+		# 副文本拆两行：品阶 / 祭炼重数，避免长单行撑爆竖屏三栏
+		detail_top = GameState.get_quality_name(quality)
+		detail_bottom = "祭炼%d/%d重" % [temper_level, GameState.MAX_TEMPER_LEVEL]
 		card.tooltip_text = item.get_stat_summary()
 	else:
 		texture = IconLibrary.get_ui_icon(empty_icon)
@@ -386,7 +587,10 @@ func _build_equipment_slot(slot: String, slot_name: String, empty_text: String,
 	center.add_child(frame)
 	center.add_child(_centered_caption(slot_name, ThemeBuilder.COLOR_TEXT_DIM, ""))
 	center.add_child(_centered_caption(name_text, accent, name_text))
-	center.add_child(_centered_caption(detail_text, ThemeBuilder.COLOR_TEXT_SECONDARY, detail_text))
+	center.add_child(_centered_caption(detail_top,
+		ThemeBuilder.COLOR_TEXT_SECONDARY, detail_top))
+	center.add_child(_centered_caption(detail_bottom,
+		ThemeBuilder.COLOR_TEXT_SECONDARY, detail_bottom))
 	if item != null:
 		ThemeBuilder.make_card_tappable(card,
 			Callable(self, "_open_equipment_sheet").bind(slot))
@@ -398,10 +602,15 @@ func _build_equipment_slot(slot: String, slot_name: String, empty_text: String,
 
 func _centered_caption(text_value: String, color: Color, tooltip: String) -> Label:
 	var label := ThemeBuilder.label(text_value, ThemeBuilder.FONT_CAPTION, color)
+	ThemeBuilder.apply_font_size(label, ThemeBuilder.FONT_CAPTION)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.clip_text = true
-	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	label.custom_minimum_size.x = 0.0
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.clip_text = false
+	label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if tooltip != "":
 		label.tooltip_text = tooltip
 	return label
@@ -427,17 +636,22 @@ func _build_natal_slot_card() -> PanelContainer:
 	frame.setup(IconLibrary.get_icon(icon_key), 36,
 		ThemeBuilder.COLOR_JADE if unlocked else ThemeBuilder.COLOR_TEXT_DIM, false, 28)
 	row.add_child(frame)
-	row.add_child(ThemeBuilder.label("本命法宝 · 丹田温养",
-		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_PRIMARY))
+	var natal_title := ThemeBuilder.label("本命法宝",
+		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_PRIMARY)
+	ThemeBuilder.apply_font_size(natal_title, ThemeBuilder.FONT_CAPTION)
+	natal_title.tooltip_text = "本命法宝 · 丹田温养"
+	row.add_child(natal_title)
 	row.add_child(ThemeBuilder.expander())
 	if not unlocked:
 		row.add_child(ThemeBuilder.chip("需元婴初期开启", ThemeBuilder.COLOR_TEXT_MUTED))
 	elif embryo_id == "":
 		row.add_child(ThemeBuilder.chip("尚未凝练器胚，轻触择一", ThemeBuilder.COLOR_AMBER))
 	else:
-		row.add_child(ThemeBuilder.chip("%s · %d 重" % [
-			NatalArtifactSystem.tier_name(int(state.get("level", 1))),
-			int(state.get("level", 1))], ThemeBuilder.COLOR_JADE))
+		var level := int(state.get("level", 1))
+		var tier_chip := ThemeBuilder.chip("%d重" % level, ThemeBuilder.COLOR_JADE)
+		tier_chip.tooltip_text = "%s · %d 重" % [
+			NatalArtifactSystem.tier_name(level), level]
+		row.add_child(tier_chip)
 	return card
 
 
@@ -452,14 +666,20 @@ func _build_technique_card() -> void:
 	jump.pressed.connect(Callable(self, "_open_page").bind("technique"))
 	head.add_child(jump)
 
+	_technique_cards.clear()
+	_technique_list = GridContainer.new()
+	_technique_list.columns = 1
+	_technique_list.add_theme_constant_override("h_separation", 6)
+	_technique_list.add_theme_constant_override("v_separation", 6)
+	_technique_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(_technique_list)
 	if GameState.get_realm_index() < 5:
-		box.add_child(ThemeBuilder.label("需炼气六层开启藏经阁",
+		_technique_list.add_child(ThemeBuilder.label("需炼气六层开启藏经阁",
 			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_MUTED))
 		return
 
-	var technique_ids: Array = GameState.equipped_techniques
 	var any_equipped := false
-	for value in technique_ids:
+	for value in GameState.equipped_techniques:
 		var technique_id := str(value)
 		if technique_id == "":
 			continue
@@ -467,25 +687,48 @@ func _build_technique_card() -> void:
 		if tech == null:
 			continue
 		any_equipped = true
-		var row := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD_DEEP,
-			ThemeBuilder.COLOR_BORDER, 8, 7)
-		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		box.add_child(row)
-		var line := ThemeBuilder.hbox(6)
-		row.add_child(line)
-		var name_label := ThemeBuilder.label("%s · 第 %d 重" % [
+		var micro := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD_DEEP,
+			ThemeBuilder.COLOR_BORDER, 8, 6)
+		micro.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var inner := ThemeBuilder.vbox(3)
+		inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		inner.set_meta("technique_inner", true)
+		micro.add_child(inner)
+		var name_label := ThemeBuilder.label("《%s》· 第 %d 重" % [
 			tech.name, GameState.get_technique_level(tech.id)],
 			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_JADE)
+		ThemeBuilder.apply_font_size(name_label, ThemeBuilder.FONT_CAPTION)
 		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		name_label.clip_text = true
-		name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		line.add_child(name_label)
-		var desc := tech.description if tech.description != "" else "暂无记载"
-		box.add_child(ThemeBuilder.wrap_label(desc, ThemeBuilder.FONT_CAPTION,
-			ThemeBuilder.COLOR_TEXT_SECONDARY))
+		name_label.clip_text = false
+		name_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+		inner.add_child(name_label)
+		var effect := ThemeBuilder.label(_technique_effect(tech),
+			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_SECONDARY)
+		ThemeBuilder.apply_font_size(effect, ThemeBuilder.FONT_CAPTION)
+		effect.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		effect.clip_text = false
+		effect.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+		inner.add_child(effect)
+		_technique_list.add_child(micro)
+		_technique_cards.append(micro)
 	if not any_equipped:
-		box.add_child(ThemeBuilder.label("暂未运转功法，可往藏经阁参悟",
+		_technique_list.add_child(ThemeBuilder.label("暂未运转功法，可往藏经阁参悟",
 			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_MUTED))
+
+
+## 微卡只取第一句效果，避免长篇说明撑高 2×2 网格
+func _technique_effect(tech: TechniqueData) -> String:
+	var text := tech.description.strip_edges()
+	if text == "":
+		return "暂无记载"
+	for sep in ["，", "；", "。", " · ", "、"]:
+		var cut := text.find(sep)
+		if cut > 0:
+			text = text.substr(0, cut)
+			break
+	if text.length() > 18:
+		return text.substr(0, 17) + "…"
+	return text
 
 
 func _build_skill_card() -> void:
@@ -499,13 +742,15 @@ func _build_skill_card() -> void:
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(grid)
 	var cap := GameState.get_skill_level_cap()
+	_skill_cells.clear()
 	for entry in SKILL_ORDER:
 		var skill_id := String((entry as Dictionary)["id"])
 		var display_name := String((entry as Dictionary)["name"])
 		var level := GameState.get_skill_level(skill_id)
 		var full := level >= cap
-		grid.add_child(_build_skill_cell(display_name,
-			"%d / %d 重" % [level, cap], skill_id, full))
+		var cell := _build_skill_cell(display_name, "%d重" % level, skill_id, full)
+		grid.add_child(cell)
+		_skill_cells.append(cell)
 
 
 func _build_skill_cell(title: String, value: String, skill_id: String,
@@ -520,11 +765,22 @@ func _build_skill_cell(title: String, value: String, skill_id: String,
 	card.add_child(row)
 	var title_label := ThemeBuilder.label(title, ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_PRIMARY)
+	ThemeBuilder.apply_font_size(title_label, ThemeBuilder.FONT_CAPTION)
+	title_label.custom_minimum_size.x = 0.0
+	# 技能名必须单行横排，禁止被窄格压成竖排
+	title_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	title_label.clip_text = false
+	title_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(title_label)
-	row.add_child(ThemeBuilder.expander())
 	var value_label := ThemeBuilder.label(value, ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_JADE if full else ThemeBuilder.COLOR_TEXT_SECONDARY)
+	ThemeBuilder.apply_font_size(value_label, ThemeBuilder.FONT_CAPTION)
+	value_label.custom_minimum_size.x = 0.0
 	value_label.size_flags_horizontal = Control.SIZE_SHRINK_END
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	value_label.tooltip_text = "上限 %d 重" % GameState.get_skill_level_cap()
 	row.add_child(value_label)
 	return card
 

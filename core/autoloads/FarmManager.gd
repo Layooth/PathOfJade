@@ -599,6 +599,25 @@ func batch_fertilize_to_ripe(index: int, preferred_id: String = "",
 
 
 ## 是否存在可继续一键催熟的生长地块（用于主按钮置灰与「灵肥已足」提示）
+## 一键催熟全部生长地块（FarmPanel 与右栏洞府态势共用同一逻辑）：
+## 逐块静默补施至 3 次上限或草药耗尽，返回 {plots: 实际催熟块数, consumed: 消耗汇总}
+func ripen_all_plots(preferred_id: String = "") -> Dictionary:
+	var did := 0
+	var consumed := {}
+	for i in range(PLOT_COUNT):
+		if is_empty(i) or is_mature(i):
+			continue
+		var herb := preferred_id if preferred_id != "" else preferred_fertilizer_herb
+		var result := batch_fertilize_to_ripe(i, herb, false)
+		var used: Dictionary = result.get("consumed", {})
+		if used.is_empty():
+			continue
+		did += 1
+		for key in used.keys():
+			consumed[key] = int(consumed.get(key, 0)) + int(used[key])
+	return {"plots": did, "consumed": consumed}
+
+
 func can_batch_ripen() -> bool:
 	for i in range(PLOT_COUNT):
 		if is_empty(i) or is_mature(i):

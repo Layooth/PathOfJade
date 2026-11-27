@@ -282,6 +282,27 @@ const TEMPLATES: Dictionary = {
 		<path d="M18 16 C17 13 19 11 18 8 M24 15 C23 12 25 10 24 7 M30 16 C29 13 31 11 30 8" stroke="{C2}" stroke-width="1.6" stroke-linecap="round"/>
 	</svg>""",
 
+	"tea_crimson_battle": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+		<path d="M18 16 L20 9" stroke="{C2}" stroke-width="2.6" stroke-linecap="round"/>
+		<path d="M24 14 L24 7" stroke="{C2}" stroke-width="2.8" stroke-linecap="round"/>
+		<path d="M30 16 L28 9" stroke="{C2}" stroke-width="2.6" stroke-linecap="round"/>
+		<path d="M10 20 H38 C38 30 32.5 36 24 36 C15.5 36 10 30 10 20 Z" fill="{C2}" fill-opacity="0.16" stroke="{C1}" stroke-width="2.8" stroke-linejoin="round"/>
+		<path d="M24 23 L29 28 L24 32 L19 28 Z" fill="{C2}" fill-opacity="0.58" stroke="{C1}" stroke-width="2.0" stroke-linejoin="round"/>
+		<path d="M17 36 L15 40 H33 L31 36" stroke="{C1}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+	</svg>""",
+
+	"tea_immortal_marrow": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+		<path d="M15 15 C15 11 19 11 19 8" stroke="{C2}" stroke-width="2.4" stroke-linecap="round"/>
+		<path d="M33 15 C33 11 29 11 29 8" stroke="{C2}" stroke-width="2.4" stroke-linecap="round"/>
+		<path d="M24 6 L26.2 10.5 L24 15 L21.8 10.5 Z" fill="{C2}" fill-opacity="0.60" stroke="{C2}" stroke-width="1.8" stroke-linejoin="round"/>
+		<path d="M12 21 C8 21 7 26 11 28" stroke="{C2}" stroke-width="2.4" stroke-linecap="round"/>
+		<path d="M36 21 C40 21 41 26 37 28" stroke="{C2}" stroke-width="2.4" stroke-linecap="round"/>
+		<path d="M12 19 H36 C36 29 31 35 24 35 C17 35 12 29 12 19 Z" fill="{C2}" fill-opacity="0.12" stroke="{C1}" stroke-width="2.8" stroke-linejoin="round"/>
+		<path d="M14 23 H34" stroke="{C2}" stroke-width="2.2" stroke-linecap="round"/>
+		<path d="M19 28.5 Q24 31.5 29 28.5" stroke="{C2}" stroke-width="2.2" stroke-linecap="round"/>
+		<path d="M24 35 V40 M17 40 H31" stroke="{C1}" stroke-width="2.8" stroke-linecap="round"/>
+	</svg>""",
+
 	"ui_leaderboard_scroll": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
 		<rect x="11" y="9" width="26" height="30" rx="3" stroke="{C1}" stroke-width="2.2" fill="{C2}" fill-opacity="0.16"/>
 		<path d="M16 17 L32 17 M16 23 L29 23 M16 29 L26 29" stroke="{C1}" stroke-width="2.0" stroke-linecap="round"/>
@@ -304,10 +325,55 @@ const TEMPLATES: Dictionary = {
 	</svg>""",
 
 	"item_spirit_fish": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
-		<path d="M12 24 C17 16 27 16 33 24 C27 32 17 32 12 24 Z" stroke="{C1}" stroke-width="2.2" stroke-linejoin="round" fill="{C2}" fill-opacity="0.22"/>
-		<polygon points="33,24 40,18 40,30" stroke="{C1}" stroke-width="2.0" stroke-linejoin="round" fill="{C2}" fill-opacity="0.26"/>
-		<circle cx="17" cy="23" r="1.6" fill="{C1}"/>
-		<path d="M21 20 C23 22 23 26 21 28" stroke="{C2}" stroke-width="1.6" stroke-linecap="round"/>
+		<path d="M10 39 Q24 34 38 39" stroke="{C2}" stroke-width="2.2" stroke-linecap="round" opacity="0.65"/>
+		<path d="M31 23 C36 18 41 15 43 16 C40 21 39 24 42 30 C39 31 35 28 31 25 Z" fill="{C2}" fill-opacity="0.42" stroke="{C1}" stroke-width="2.3" stroke-linejoin="round"/>
+		<path d="M18 16 C22 10 28 10 31 15" fill="{C2}" fill-opacity="0.34" stroke="{C1}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+		<path d="M7 24 C11 15 24 14 33 23 C25 32 12 32 7 24 Z" fill="{C2}" fill-opacity="0.28" stroke="{C1}" stroke-width="2.5" stroke-linejoin="round"/>
+		<path d="M16 19 C18 22 18 26 16 28" stroke="{C1}" stroke-width="2.0" stroke-linecap="round"/>
+		<path d="M21 22 Q24 25 27 22" stroke="{C2}" stroke-width="1.8" stroke-linecap="round"/>
+		<circle cx="12.5" cy="22.5" r="1.7" fill="{C1}"/>
+	</svg>""",
+
+	"item_qingwen_fish": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+		<path d="M33 25 L42 18 C41 23 41 27 42 33 L33 27 Z" fill="{C2}" fill-opacity="0.38" stroke="{C1}" stroke-width="2.3" stroke-linejoin="round"/>
+		<path d="M17 15 C22 10 29 11 32 16" fill="{C2}" fill-opacity="0.32" stroke="{C1}" stroke-width="2.2" stroke-linejoin="round"/>
+		<path d="M19 33 L24 38 L27 33" fill="{C2}" fill-opacity="0.36" stroke="{C1}" stroke-width="2.0" stroke-linejoin="round"/>
+		<path d="M7 26 C10 15 24 13 34 25 C25 36 11 36 7 26 Z" fill="{C2}" fill-opacity="0.24" stroke="{C1}" stroke-width="2.5" stroke-linejoin="round"/>
+		<path d="M19 17.5 C21 22 21 28 19 32.5" stroke="{C2}" stroke-width="2.2" stroke-linecap="round"/>
+		<path d="M24.5 18 C26.5 22.5 26.5 27.5 24.5 32" stroke="{C2}" stroke-width="2.2" stroke-linecap="round"/>
+		<path d="M14.5 20.5 C16 23.5 16 27.5 14.5 30" stroke="{C1}" stroke-width="1.8" stroke-linecap="round"/>
+		<circle cx="11.5" cy="24" r="1.7" fill="{C1}"/>
+	</svg>""",
+
+	"item_chilin_fish": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+		<path d="M30 24 C36 16 42 13 43 16 C41 21 39 24 42 32 C38 33 34 29 30 26 Z" fill="{C2}" fill-opacity="0.52" stroke="{C1}" stroke-width="2.3" stroke-linejoin="round"/>
+		<path d="M16 16 C20 8 28 8 31 15" fill="{C2}" fill-opacity="0.62" stroke="{C1}" stroke-width="2.2" stroke-linejoin="round"/>
+		<path d="M8 26 C11 14 24 13 33 24 C25 34 12 35 8 26 Z" fill="{C2}" fill-opacity="0.26" stroke="{C1}" stroke-width="2.5" stroke-linejoin="round"/>
+		<path d="M18 16.5 C23 17 26 21 25 26 C22 25 19 22 18 16.5 Z" fill="{C2}" fill-opacity="0.72"/>
+		<path d="M8.5 27 C6 29 5 32 7 34" stroke="{C2}" stroke-width="2.0" stroke-linecap="round"/>
+		<path d="M15 21 C16.5 24 16.5 27.5 15 30" stroke="{C1}" stroke-width="1.8" stroke-linecap="round"/>
+		<circle cx="12" cy="23.5" r="1.7" fill="{C1}"/>
+	</svg>""",
+
+	"item_hantan_eel": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+		<path d="M14 14 C22 10 27 16 24 22 C21 28 28 33 36 30" stroke="{C2}" stroke-width="5.5" stroke-linecap="round" opacity="0.55"/>
+		<path d="M10 16 C16 11 26 14 23 22 C20 30 28 35 37 31 L42 29" stroke="{C1}" stroke-width="8.0" stroke-linecap="round" stroke-linejoin="round"/>
+		<path d="M10 16 C16 11 26 14 23 22 C20 30 28 35 37 31 L41 29.5" stroke="{C2}" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+		<path d="M14 14.2 C19 13 23 16 22 21" stroke="{C2}" stroke-width="1.8" stroke-linecap="round"/>
+		<circle cx="10.5" cy="15.5" r="1.4" fill="{C1}"/>
+		<path d="M35 13 L35 19 M32 16 L38 16" stroke="{C2}" stroke-width="1.8" stroke-linecap="round"/>
+		<circle cx="13" cy="34" r="1.8" fill="{C2}"/>
+	</svg>""",
+
+	"item_jinsui_dragonfish": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+		<circle cx="11" cy="12" r="3.2" fill="{C2}" fill-opacity="0.68" stroke="{C2}" stroke-width="1.8"/>
+		<path d="M31 28 C37 25 42 20 43 23 C41 28 40 31 41 37 C37 37 33 34 30 30 Z" fill="{C2}" fill-opacity="0.48" stroke="{C1}" stroke-width="2.3" stroke-linejoin="round"/>
+		<path d="M17 18 L22 11 L26 16 L31 12 L33 19" fill="{C2}" fill-opacity="0.52" stroke="{C1}" stroke-width="2.2" stroke-linejoin="round"/>
+		<path d="M8 27 C12 16 25 16 33 27 C25 36 13 36 8 27 Z" fill="{C2}" fill-opacity="0.24" stroke="{C1}" stroke-width="2.5" stroke-linejoin="round"/>
+		<path d="M19 22 Q23 26 27 23 M18 27 Q22 30 26 28" stroke="{C2}" stroke-width="1.9" stroke-linecap="round"/>
+		<path d="M9 24 C6 21 6 18 8 16" stroke="{C2}" stroke-width="2.0" stroke-linecap="round"/>
+		<path d="M8.5 29 C6 32 7 36 10 37" stroke="{C2}" stroke-width="2.0" stroke-linecap="round"/>
+		<circle cx="13" cy="24.5" r="1.8" fill="{C1}"/>
 	</svg>""",
 
 	"ui_jump": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
@@ -402,13 +468,12 @@ const TEMPLATES: Dictionary = {
 		<circle cx="13.5" cy="11.5" r="1.5" fill="{C2}"/>
 	</svg>""",
 
-	"skill_woodcutting": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-		<path d="M 13 37 L 34 11" fill="none" stroke="{C1}" stroke-width="2.8" stroke-linecap="round"/>
-		<path d="M 24 14 L 35 16 C 37.5 21 36.5 26.5 33 30 L 22 22 Z" fill="{C1}" fill-opacity="0.2" stroke="{C1}" stroke-width="2.2" stroke-linejoin="round"/>
-		<path d="M 33.5 17.2 C 35.5 21 34.8 25.5 32 28.5" fill="none" stroke="{C2}" stroke-width="1.8" stroke-linecap="round"/>
-		<ellipse cx="18" cy="36.5" rx="8.5" ry="3.5" fill="{C2}" fill-opacity="0.18" stroke="{C1}" stroke-width="2.0"/>
-		<path d="M 9.5 36.5 L 10.5 41.5 Q 18 43.5 25.5 41.5 L 26.5 36.5" fill="none" stroke="{C1}" stroke-width="2.0" stroke-linejoin="round"/>
-		<ellipse cx="18" cy="36.5" rx="4.2" ry="1.6" fill="none" stroke="{C2}" stroke-width="1.3"/>
+	"skill_woodcutting": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+		<path d="M9 39 L34 14" stroke="{C1}" stroke-width="4.0" stroke-linecap="round"/>
+		<path d="M9 39 L14 34" stroke="#9A6822" stroke-width="4.4" stroke-linecap="round"/>
+		<path d="M22.5 18 L28 12.5 C31.5 14 34.5 14 37.5 13 C41.5 19.5 41 28.5 34 35.5 C31 30.5 28 27 24.5 25 L21 21.5 Z" fill="{C2}" fill-opacity="0.18" stroke="{C1}" stroke-width="2.6" stroke-linejoin="round"/>
+		<path d="M36.8 14.8 C40 20.2 39.6 28 33.8 34" stroke="{C2}" stroke-width="3.2" stroke-linecap="round"/>
+		<path d="M31.5 19.5 C33.8 22.5 33.5 26.5 30.5 29.5" stroke="{C2}" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
 	</svg>""",
 
 	"skill_mining": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
@@ -621,10 +686,13 @@ const TEMPLATES: Dictionary = {
 
 	# ==================== 炼气中阶材料 / 过渡装备 / 高阶回血丹 ====================
 	"item_cuiyun_wood": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
-		<rect x="9" y="18" width="24" height="14" rx="4" transform="rotate(-18 21 25)" stroke="{C1}" stroke-width="2.2" fill="{C2}" fill-opacity="0.16"/>
-		<ellipse cx="32" cy="21.5" rx="3.5" ry="6.5" transform="rotate(-18 32 21.5)" stroke="{C1}" stroke-width="2.0" fill="{C2}" fill-opacity="0.28"/>
-		<path d="M16 26 C20 24 23 23.5 27 22" stroke="{C1}" stroke-width="1.5" stroke-linecap="round"/>
-		<path d="M26 15 C28 10 33 9 36 11 C34 15 30 16 26 15 Z" stroke="{C2}" stroke-width="1.8" stroke-linejoin="round" fill="{C2}" fill-opacity="0.28"/>
+		<path d="M9 27 L27 16 C30 14 35 17 37 22 C39 27 37 32 34 34 L16 42 C12 43 8 39 7 34 C6 30 7 28 9 27 Z" fill="{C2}" fill-opacity="0.22" stroke="{C1}" stroke-width="2.5" stroke-linejoin="round"/>
+		<ellipse cx="13" cy="34.5" rx="5.5" ry="7.5" transform="rotate(-18 13 34.5)" fill="{C2}" fill-opacity="0.30" stroke="{C1}" stroke-width="2.4"/>
+		<ellipse cx="13" cy="34.5" rx="2.5" ry="3.5" transform="rotate(-18 13 34.5)" stroke="{C2}" stroke-width="1.6"/>
+		<path d="M21 26 L31 20.5 M23 32 L33 27" stroke="{C2}" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
+		<path d="M26 17 C25 10 31 6 38 7 C37 13 33 17 26 17 Z" fill="{C2}" fill-opacity="0.56" stroke="{C1}" stroke-width="2.2" stroke-linejoin="round"/>
+		<path d="M25 17 C20 12 14 12 11 16 C15 20 21 20 25 17 Z" fill="{C2}" fill-opacity="0.36" stroke="{C1}" stroke-width="2.2" stroke-linejoin="round"/>
+		<path d="M28 15 L34 10" stroke="{C1}" stroke-width="1.5" stroke-linecap="round" opacity="0.65"/>
 	</svg>""",
 
 	"item_qinggang_ore": """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
@@ -2535,6 +2603,10 @@ const ITEM_KEY_MAP: Dictionary = {
 	"item_spirit_dew": "item_spirit_dew",
 	"item_spirit_nectar": "item_spirit_nectar",
 	"item_spirit_fish": "item_spirit_fish",
+	"item_qingwen_fish": "item_qingwen_fish",
+	"item_chilin_fish": "item_chilin_fish",
+	"item_hantan_eel": "item_hantan_eel",
+	"item_jinsui_dragonfish": "item_jinsui_dragonfish",
 	"equip_iron_sword": "equip_sword",
 	"equip_mithril_sword": "equip_mithril_sword",
 	"equip_redgold_sword": "equip_redgold_sword",

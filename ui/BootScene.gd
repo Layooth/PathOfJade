@@ -6,6 +6,8 @@ const BG_COLOR: Color = Color("#F7F3E8")
 const LOGIN_SCENE: String = "res://ui/LoginScene.tscn"
 const PATCH_DIR: String = "user://patches"
 const PATCH_STATE_PATH: String = "user://patch_state.json"
+## 当前源码底包已内置的补丁卷数。导出新 APK 前按实际内置内容递增。
+const BASE_PATCH_REV: int = 2
 const VERSION_TIMEOUT: float = 3.0
 ## .pck 下载不设总超时；仅在连续 20 秒没有新字节写入时中断
 const DOWNLOAD_STALL_TIMEOUT_MS: int = 20000
@@ -175,6 +177,14 @@ func _build_ui() -> void:
 
 
 func _run_boot() -> void:
+	if _is_editor_debug():
+		# 编辑器 F5 永远跑当前本地源码：不拉清单、不下载、不挂载任何历史 .pck
+		_status.text = "本地调试"
+		if _version_label != null:
+			_version_label.text = _editor_version_text()
+		_set_progress(100.0)
+		await _finish("本地调试，径直入世")
+		return
 	_ensure_patch_dir()
 	_load_state()
 	await _mount_local_patches()
@@ -189,9 +199,13 @@ func _run_boot() -> void:
 		return
 	var patches_variant: Variant = data.get("patches", [])
 	var patches: Array = patches_variant if typeof(patches_variant) == TYPE_ARRAY else []
+	# 成功拿到清单就先落一份「热更志」：即使本次已是最新、无需下载，也能在设置里回看
+	if not patches.is_empty():
+		CloudSaveManager.record_patch_notes_in_state(_state, patches)
+		_save_state()
 	# 清单含多卷时也只拉 rev 最大的最新全量包，不逐卷下载中间版本
 	var latest_patch := _pick_latest_patch(patches)
-	if latest_patch.is_empty():
+	if latest_patch.is_empty() or not _needs_download(int(latest_patch.get("rev", 0))):
 		await _finish("天道卷册已是最新")
 		return
 	_pending_patches = [latest_patch]
@@ -321,22 +335,21 @@ func _ensure_patch_dir() -> void:
 
 
 func _load_state() -> void:
-	_state = {"current_patch_rev": 0, "installed_patches": []}
-	if not FileAccess.file_exists(PATCH_STATE_PATH):
-		return
-	var file := FileAccess.open(PATCH_STATE_PATH, FileAccess.READ)
-	if file == null:
-		return
-	var parsed: Variant = JSON.parse_string(file.get_as_text())
-	file.close()
-	if typeof(parsed) == TYPE_DICTIONARY:
-		_state = parsed
-	_state["current_patch_rev"] = maxi(0, int(_state.get("current_patch_rev", 0)))
-	var installed: Variant = _state.get("installed_patches", [])
-	_state["installed_patches"] = installed if typeof(installed) == TYPE_ARRAY else []
+	_state = CloudSaveManager.patch_state_defaults()
+	if FileAccess.file_exists(PATCH_STATE_PATH):
+		var file := FileAccess.open(PATCH_STATE_PATH, FileAccess.READ)
+		if file != null:
+			var parsed: Variant = JSON.parse_string(file.get_as_text())
+			file.close()
+			if typeof(parsed) == TYPE_DICTIONARY:
+				_state = CloudSaveManager.normalize_patch_state(parsed as Dictionary)
+	# 底包基准并入有效卷数；旧档只升不降，字段结构不变
+	_state["current_patch_rev"] = _effective_patch_rev()
 
 
 func _save_state() -> void:
+	# 统一由 CloudSaveManager 归一化：补 notes / last_seen_notes_rev，旧档字段原样保留
+	_state = CloudSaveManager.normalize_patch_state(_state)
 	var file := FileAccess.open(PATCH_STATE_PATH, FileAccess.WRITE)
 	if file == null:
 		return
@@ -347,13 +360,19 @@ func _save_state() -> void:
 
 
 func _mount_local_patches() -> void:
-	_status.text = "正在唤醒本地灵纹..."
+	_set_status("正在唤醒本地灵纹...")
 	_set_progress(4.0)
 	var files := _scan_patch_files()
 	for i in range(files.size()):
 		var entry: Dictionary = files[i]
 		var rev := int(entry["rev"])
 		var path := String(entry["path"])
+		if not _should_mount_local_rev(rev):
+			# 已并入底包的旧卷：直接清理，避免旧 .pck 反向覆盖新 APK 源码
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+			_forget_installed(rev)
+			_set_status("旧卷已并入底包，已清去残卷")
+			continue
 		if ProjectSettings.load_resource_pack(path, true):
 			_loaded_patch_this_boot = true
 			_remember_installed(rev, String(entry["name"]))
@@ -410,7 +429,7 @@ func _forget_installed(rev: int) -> void:
 
 func _recompute_current_rev() -> void:
 	var installed: Array = _state.get("installed_patches", [])
-	var highest := 0
+	var highest := BASE_PATCH_REV
 	for name in installed:
 		var n := String(name)
 		if n.begins_with("patch_") and n.ends_with(".pck"):
@@ -427,7 +446,7 @@ func _fetch_version() -> Dictionary:
 	http.timeout = VERSION_TIMEOUT
 	add_child(http)
 	var url := CloudSaveManager.SERVER_BASE_URL + "/api/version?patch_rev=" \
-		+ str(int(_state.get("current_patch_rev", 0)))
+		+ str(_effective_patch_rev())
 	var err := http.request(url)
 	if err != OK:
 		http.queue_free()
@@ -523,6 +542,8 @@ func _download_and_mount(patch: Dictionary, index: int, total: int) -> bool:
 	# 最新全量卷即唯一已安装卷；物理清理所有旧 .pck 与 .tmp/.tmp.meta
 	_state["installed_patches"] = [filename]
 	_state["current_patch_rev"] = rev
+	# 本次实际挂载的补丁说明一并入库（无 notes 时由归一化补修仙默认说明）
+	CloudSaveManager.record_patch_notes_in_state(_state, [_download_patch])
 	_save_state()
 	_cleanup_patch_files(filename)
 	_last_error = ""
@@ -873,10 +894,36 @@ func _set_status(text_value: String) -> void:
 		_status.text = text_value
 
 
+## 编辑器 F5 调试：完全不碰热更，只展示本地源码版本
+func _is_editor_debug() -> bool:
+	return OS.has_feature("editor")
+
+
+func _editor_version_text() -> String:
+	return "v%s · 本地调试" % ThemeBuilder.APP_DISPLAY_VERSION
+
+
+## 当前有效补丁卷数：底包基准与已安装本地卷取较大者
+func _effective_patch_rev() -> int:
+	return maxi(BASE_PATCH_REV, int(_state.get("current_patch_rev", 0)))
+
+
+func _needs_download(latest_rev: int) -> bool:
+	return latest_rev > _effective_patch_rev()
+
+
+## 小于等于底包基准的旧 .pck 已无意义，禁止挂载并清理
+func _should_mount_local_rev(rev: int) -> bool:
+	return rev > BASE_PATCH_REV
+
+
 func _version_text() -> String:
+	if _is_editor_debug():
+		return _editor_version_text()
 	var rev := 0
 	if _state.has("current_patch_rev"):
 		rev = int(_state.get("current_patch_rev", 0))
 	if rev <= 0:
 		rev = CloudSaveManager.get_current_patch_rev()
-	return "天道初开" if rev <= 0 else "天道第 %d 卷" % rev
+	var patch_text := "天道初开" if rev <= 0 else "天道第 %d 卷" % rev
+	return "v%s · %s" % [ThemeBuilder.APP_DISPLAY_VERSION, patch_text]

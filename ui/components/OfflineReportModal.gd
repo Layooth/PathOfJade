@@ -24,6 +24,17 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
 	_build()
+	_refresh_panel_width()
+	if get_viewport() != null:
+		get_viewport().size_changed.connect(_refresh_panel_width)
+
+
+## 玉简宽度自适应：桌面 480，窄屏让出 24px 边距（450 竖屏不再横向溢出）
+func _refresh_panel_width() -> void:
+	if _panel == null:
+		return
+	var vw := get_viewport_rect().size.x
+	_panel.custom_minimum_size.x = minf(480.0, maxf(300.0, vw - 24.0))
 
 
 func _build() -> void:
@@ -41,6 +52,7 @@ func _build() -> void:
 
 	_panel = PanelContainer.new()
 	_panel.custom_minimum_size = Vector2(480, 0)
+	# 宽度在 _ready 末尾按视口宽度收口（450 竖屏自适应到 426）
 	# 垂直居中自适应内容高度：面板高度只由内容决定，不写死固定高度
 	_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_panel.add_theme_stylebox_override("panel",

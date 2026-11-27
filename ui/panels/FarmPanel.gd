@@ -8,6 +8,8 @@ var _summary_label: Label
 var _aura_panel: PanelContainer
 var _aura_label: Label
 var _soil_label: Label
+## 灵脉明细：生长 / 伴生 / 灵气反哺增量，可换行不截断
+var _soil_detail_label: Label
 var _soil_button: Button
 var _plots_box: GridContainer
 var _harvest_all_button: Button
@@ -45,7 +47,10 @@ func _on_inventory_changed() -> void:
 	if not is_visible_in_tree():
 		_is_dirty = true
 		return
-	_queue_refresh()
+	# 库存变化只更新灵种匣 / 摘要 / 灵脉数字，不重建整页地块卡
+	_refresh_soil_label()
+	_refresh_summary()
+	_refresh_seed_overview()
 
 
 func _on_visibility_changed() -> void:
@@ -135,10 +140,13 @@ func _build() -> void:
 	_aura_label = ThemeBuilder.label("", ThemeBuilder.FONT_BODY_SUB)
 	_aura_panel.add_child(_aura_label)
 	head_box.add_child(_aura_panel)
-	# 仙壤淬灵：灵脉品阶 + 淬灵按钮（吞吐富余灵种与灵石，永久缩短生长）
+	# 仙壤淬灵：灵脉品阶 + 淬灵按钮；明细独立成行可换行，1.20 大字档也不截断
+	var soil_box := ThemeBuilder.vbox(2)
+	soil_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	head_box.add_child(soil_box)
 	var soil_row := ThemeBuilder.hbox(8)
 	soil_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	head_box.add_child(soil_row)
+	soil_box.add_child(soil_row)
 	_soil_label = ThemeBuilder.label("", ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_TEXT_JADE)
 	soil_row.add_child(_soil_label)
@@ -150,6 +158,10 @@ func _build() -> void:
 	ThemeBuilder.apply_brush_kai(_soil_button)
 	_soil_button.pressed.connect(_show_soil_sheet)
 	soil_row.add_child(_soil_button)
+	_soil_detail_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_CAPTION,
+		ThemeBuilder.COLOR_TEXT_SECONDARY)
+	_soil_detail_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	soil_box.add_child(_soil_detail_label)
 	ThemeBuilder.attach_header_watermark(header, IconLibrary.get_nav_icon("farm"))
 
 	# 主体：窄屏上下堆叠 / 宽屏左「灵田」右「灵种匣」
@@ -553,8 +565,8 @@ func _build_plot_card(index: int) -> PanelContainer:
 	crop_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	box.add_child(crop_label)
 
-	var bar := ThemeBuilder.progress_bar(
-		ThemeBuilder.COLOR_JADE if mature else ThemeBuilder.COLOR_AMBER, 10)
+	# 灵田生长条统一暖金棕胶囊（成熟与否由「可收获」徽记表达，不靠条色）
+	var bar := ThemeBuilder.progress_bar_grow()
 	bar.value = FarmManager.get_progress(index)
 	box.add_child(bar)
 
@@ -753,21 +765,11 @@ func _apply_right_button_style(gold: bool) -> void:
 		ThemeBuilder.COLOR_TEXT_MUTED)
 
 
-## 一键催熟：所有生长中地块连续施肥至成熟或草药耗尽
+## 一键催熟：所有生长中地块连续施肥至成熟或草药耗尽（逻辑在 FarmManager 单出口）
 func _on_ripen_all_pressed() -> void:
-	var did := 0
-	var consumed := {}
-	for i in range(FarmManager.PLOT_COUNT):
-		if FarmManager.is_empty(i) or FarmManager.is_mature(i):
-			continue
-		# 逐块静默催熟，全部结束后只刷新一次（4 次全量重建会卡顿数秒）
-		var result := FarmManager.batch_fertilize_to_ripe(i,
-			FarmManager.preferred_fertilizer_herb, false)
-		var used: Dictionary = result.get("consumed", {})
-		if not used.is_empty():
-			did += 1
-			for key in used.keys():
-				consumed[key] = int(consumed.get(key, 0)) + int(used[key])
+	var result := FarmManager.ripen_all_plots()
+	var did := int(result.get("plots", 0))
+	var consumed: Dictionary = result.get("consumed", {})
 	if did <= 0:
 		EventBus.toast.emit("灵肥已足" if not FarmManager.can_batch_ripen()
 			else "需近阶灵草")
@@ -781,12 +783,21 @@ func _on_ripen_all_pressed() -> void:
 func _refresh_aura_chip() -> void:
 	if _aura_panel == null or _aura_label == null:
 		return
-	var planted := FarmManager.count_planted()
+	var aura := GameState.get_farm_aura_breakdown()
+	var planted := int(aura["planted"])
+	var soil_level := int(aura["soil_level"])
+	var soil_cultivation := int(round(float(aura["soil_cultivation"]) * 100.0))
+	var soil_alchemy := int(round(float(aura["soil_alchemy"]) * 100.0))
 	if planted > 0:
-		var cultivation := int(round(GameFormulas.farm_aura_cultivation(planted) * 100.0))
-		var alchemy := int(round(GameFormulas.farm_aura_alchemy_double(planted) * 100.0))
+		var cultivation := int(round(float(aura["cultivation"]) * 100.0))
+		var alchemy := int(round(float(aura["alchemy"]) * 100.0))
 		_aura_label.text = "灵气反哺：修为 +%d%% · 丹道双倍 +%d%%" % [cultivation, alchemy]
 		_aura_label.add_theme_color_override("font_color", ThemeBuilder.COLOR_JADE)
+		_aura_panel.tooltip_text = "灵田 %d 块：修为 +%d%% · 丹道 +%d%%；灵脉 %d 重：修为 +%d%% · 丹道 +%d%%" % [
+			planted,
+			int(round(float(aura["plot_cultivation"]) * 100.0)),
+			int(round(float(aura["plot_alchemy"]) * 100.0)),
+			soil_level, soil_cultivation, soil_alchemy]
 		var box := ThemeBuilder.panel_box(ThemeBuilder.COLOR_JADE_SOFT,
 			ThemeBuilder.COLOR_JADE, 8, 1, 8)
 		box.content_margin_top = 3
@@ -797,6 +808,8 @@ func _refresh_aura_chip() -> void:
 	else:
 		_aura_label.text = "灵气反哺：未激活（播种即生效）"
 		_aura_label.add_theme_color_override("font_color", ThemeBuilder.COLOR_TEXT_DIM)
+		_aura_panel.tooltip_text = "已淬灵脉 %d 重：播种后额外获得修为 +%d%% · 丹道 +%d%%" % [
+			soil_level, soil_cultivation, soil_alchemy]
 		var box := ThemeBuilder.panel_box(ThemeBuilder.COLOR_SUBTLE,
 			Color(0, 0, 0, 0), 8, 0, 8)
 		box.content_margin_top = 3
@@ -806,17 +819,25 @@ func _refresh_aura_chip() -> void:
 		_aura_panel.add_theme_stylebox_override("panel", box)
 
 
-## 仙壤灵脉品阶展示：「灵脉 · 三重（生长 -4.5% · 伴生 +4.5%）」
+## 仙壤灵脉品阶展示：「灵脉 · 三重」+ 明细行「生长 / 伴生 / 反哺修为 / 丹道双倍」
 func _refresh_soil_label() -> void:
 	if _soil_label == null:
 		return
 	var level := FarmManager.soil_spirit_level
 	var names := ["零重", "一重", "二重", "三重", "四重", "五重", "六重", "七重", "八重", "九重",
 		"十重", "十一重", "十二重", "十三重", "十四重", "十五重", "十六重", "十七重", "十八重", "十九重", "二十重"]
-	_soil_label.text = "灵脉 · %s（生长 -%d%% · 伴生 +%d%%）" % [
-		names[clampi(level, 0, 20)],
+	_soil_label.text = "灵脉 · %s" % names[clampi(level, 0, 20)]
+	var aura_cultivation := int(round(GameFormulas.farm_soil_cultivation_pct(level) * 100.0))
+	var aura_alchemy := int(round(GameFormulas.farm_soil_alchemy_pct(level) * 100.0))
+	var detail := "（生长 -%d%% · 伴生 +%d%% · 反哺修为 +%d%% / 丹道 +%d%%）" % [
 		int(round(FarmManager.soil_time_reduction() * 100.0)),
-		int(round(FarmManager.soil_rare_bonus() * 100.0))]
+		int(round(FarmManager.soil_rare_bonus() * 100.0)),
+		aura_cultivation, aura_alchemy]
+	if _soil_detail_label != null:
+		_soil_detail_label.text = detail
+		_soil_detail_label.tooltip_text = "仙壤灵脉 %d 重：%s；反哺需至少一块已播种灵田生效" % [
+			level, detail]
+	_soil_label.tooltip_text = _soil_label.text + detail
 	# 未达筑基初期只禁用继续淬灵；旧档已有 level 与增益保留原样显示
 	if _soil_button != null:
 		var can_enrich := FarmManager.can_soil_enrich()
@@ -850,12 +871,20 @@ func _show_soil_sheet() -> void:
 	box.add_child(_soil_value_row("奇珍伴生", "+%d%% → +%d%%" % [
 		int(round(FarmManager.soil_rare_bonus() * 100.0)),
 		int(round(minf(0.015 * float(level + 1), 0.30) * 100.0))]))
+	# 灵气反哺增量：升级前就能看到这一重带来的收益（需已播种灵田生效）
+	box.add_child(_soil_value_row("反哺 · 修为", "+%d%% → +%d%%" % [
+		int(round(GameFormulas.farm_soil_cultivation_pct(level) * 100.0)),
+		int(round(GameFormulas.farm_soil_cultivation_pct(level + 1) * 100.0))]))
+	box.add_child(_soil_value_row("反哺 · 丹道双倍", "+%d%% → +%d%%" % [
+		int(round(GameFormulas.farm_soil_alchemy_pct(level) * 100.0)),
+		int(round(GameFormulas.farm_soil_alchemy_pct(level + 1) * 100.0))]))
 	box.add_child(_soil_value_row("所需灵石", GameFormulas.format_num(float(stone))))
 	box.add_child(_soil_value_row("所需灵种", "%d 阶及以上灵种 %d 枚 · 当前可用 %d 枚" % [
 		min_tier, need, available]))
 
 	var tip := ThemeBuilder.wrap_label(
-		"每种灵种保留 20 枚底仓；连淬会按每升一重后的阶位门槛逐重校验，高阶灵种不足时停在可淬灵的最高次数。",
+		"每种灵种保留 20 枚底仓；连淬会按每升一重后的阶位门槛逐重校验，高阶灵种不足时停在可淬灵的最高次数。"
+		+ "灵气反哺随灵脉成长：每重 +1% 修为、每 2 重 +1% 丹道双倍（20 重封顶 +20% / +10%），需至少一块已播种灵田生效。",
 		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_SECONDARY)
 	var ops := ThemeBuilder.hbox(8)
 	ops.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -924,8 +953,8 @@ func _show_help() -> void:
 		{"text": "静置生长", "desc": "灵田独立产线，不占用主修 / 分神；神游或关闭游戏也照常成熟。"},
 		{"text": "大丰收", "desc": "收割量随采药寻灵重数、灵肥与功法提升；每次收割还可能伴生灵田奇珍。"},
 		{"text": "施灵肥", "desc": "灵草阶位最多低于作物 1 阶，近阶灵草方可施肥；每轮最多施 3 次，每次剩余时间 ×0.75（保底 5 秒）、丰产 +20%，满施累计缩时约 58%、丰产 +60%。基础生长时长与伴生奇珍仍需依靠「仙壤淬灵」。"},
-		{"text": "灵气反哺", "desc": "每块已播种灵田提供吐纳修为 +3%、丹道双倍 +2%，四块满种收益最高。"},
-		{"text": "仙壤淬灵", "desc": "吞吐富余灵种与灵石淬炼仙壤：每重生长周期 -1.5%、奇珍伴生 +1.5%（各封顶 30%，每种灵种留存 20 枚底仓）。"},
+		{"text": "灵气反哺", "desc": "每块已播种灵田提供吐纳修为 +3%、丹道双倍 +2%（四块 +12% / +8%）。仙壤灵脉每重再 +1% 修为、每 2 重再 +1% 丹道双倍，20 重封顶 +20% / +10%——四块满种且灵脉二十重时合计修为 +32%、丹道双倍 +18%。"},
+		{"text": "仙壤淬灵", "desc": "吞吐富余灵种与灵石淬炼仙壤：每重生长周期 -1.5%、奇珍伴生 +1.5%（各封顶 30%）；同时放大灵气反哺（每重 +1% 修为 / 每 2 重 +1% 丹道双倍，封顶 +20% / +10%）。每种灵种留存 20 枚底仓。"},
 	])
 
 

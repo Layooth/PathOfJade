@@ -130,8 +130,9 @@ func _draw() -> void:
 func _on_started() -> void:
 	_active = true
 	_result = 0
-	_icon.set_pulsing(true)
 	_cloud_alpha = 1.0
+	if is_visible_in_tree():
+		_icon.set_pulsing(true)
 
 
 func _on_thunder(_index: int, damage: int, warded: bool, _hp: int, _max_hp: int) -> void:
@@ -155,7 +156,8 @@ func _on_thunder(_index: int, damage: int, warded: bool, _hp: int, _max_hp: int)
 func _on_finished(success: bool, _message: String) -> void:
 	_active = false
 	_result = 2 if success else 1
-	_icon.set_pulsing(success)
+	if is_visible_in_tree():
+		_icon.set_pulsing(success)
 	var ink := InkVfxLayer.instance
 	if ink != null and is_visible_in_tree():
 		var center := get_global_rect().position + Vector2(maxf(size.x, 320.0) * 0.5, CENTER_Y)
@@ -171,7 +173,11 @@ func _on_reset() -> void:
 
 
 func _on_visibility_changed() -> void:
-	set_process(is_visible_in_tree())
+	var vis := is_visible_in_tree()
+	set_process(vis)
+	if vis:
+		# 隐藏期间不驱动脉冲 Tween，回到页面时按当前状态补一次
+		_icon.set_pulsing(_active or _result == 2)
 
 
 func _shake() -> void:

@@ -76,7 +76,8 @@ func _build_ui() -> void:
 ## 右下角天道卷号：纯文字贴角，1px 宣纸色文字阴影保证叠在山石上仍清晰
 func _build_patch_badge() -> void:
 	var rev := CloudSaveManager.get_current_patch_rev()
-	var text_value := "天道初开" if rev <= 0 else "天道第 %d 卷" % rev
+	var patch_text := "天道初开" if rev <= 0 else "天道第 %d 卷" % rev
+	var text_value := "v%s · %s" % [ThemeBuilder.APP_DISPLAY_VERSION, patch_text]
 	var badge := ThemeBuilder.label(text_value, ThemeBuilder.FONT_CAPTION,
 		Color(0.173, 0.165, 0.149, 0.75))
 	badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT

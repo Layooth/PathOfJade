@@ -49,6 +49,26 @@ const REAL_SFX_FADE_IN_SEC: float = 0.035
 const SFX_FADE_IN_SEC: float = 0.012
 const SFX_FADE_OUT_SEC: float = 0.12
 
+## ---- 高频循环拟音防叠音（采集 / 制造 / 普攻 / 收竿） ----
+## 同一音效 ID 的最短重复间隔
+const LOOP_SFX_COOLDOWN_SEC: float = 0.35
+## 全局最小间隔：0.18s 内最多放行一条循环拟音，多槽同帧完成只响一次
+const LOOP_SFX_MIN_GAP_MS: int = 180
+## 同时发声的短音效声部上限（含真实拟音与程序化兜底）
+const MAX_SFX_VOICES: int = 4
+## 循环拟音音量层级：比 UI 点击(-5) / 突破(-1.5) / 稀有掉落(-1.5) / 渡劫(-2) 低 4~6dB
+const LOOP_SFX_VOLUME_DB: float = -9.0
+const LOOP_GATHER_DB: float = -16.0
+const LOOP_CRAFT_DB: float = -10.5
+const LOOP_COMBAT_DB: float = -9.5
+## 前台节奏页：玩家正在看这些页面时，后台百艺循环拟音整体静默
+const FOREGROUND_RHYTHM_PAGES: Array[String] = [
+	"combat", "tower", "fishing_tea", "tribulation",
+]
+## 战斗节奏音页：离开秘境 / 镇魔塔后，普攻与引雷不再在后台作响
+const COMBAT_SFX_PAGES: Array[String] = ["combat", "tower"]
+var _last_loop_msec: int = -100000
+
 ## 真实百艺拟音：显式路径，保证导出 APK 后不依赖目录扫描
 const SKILL_SFX: Dictionary = {
 	"skill_herb": {
@@ -240,7 +260,8 @@ func _load_skill_sfx() -> void:
 
 func _play_skill(key: String, volume_db: float = REAL_SFX_VOLUME_DB,
 		cooldown_sec: float = REAL_SFX_COOLDOWN_SEC,
-		pitch_min: float = 0.95, pitch_max: float = 1.05) -> bool:
+		pitch_min: float = 0.95, pitch_max: float = 1.05,
+		important: bool = false) -> bool:
 	var streams: Array = _skill_streams.get(key, [])
 	if streams.is_empty():
 		return false
@@ -264,35 +285,37 @@ func _play_skill(key: String, volume_db: float = REAL_SFX_VOLUME_DB,
 	# 每个技能仅一个播放器：长音效未播完时直接顶替，避免挂机叠音
 	if player.playing:
 		player.stop()
+	_ensure_voice_room(player)
 	player.stream = streams[index]
 	player.pitch_scale = _rng.randf_range(pitch_min, pitch_max)
 	_start_player_fade(player, volume_db + linear_to_db(get_volume()),
-		REAL_SFX_FADE_IN_SEC, 18.0)
+		REAL_SFX_FADE_IN_SEC, 18.0, important)
 	return true
 
 
 func _play_skill_with_fallback(key: String, volume_db: float = REAL_SFX_VOLUME_DB,
-		cooldown_sec: float = REAL_SFX_COOLDOWN_SEC) -> void:
-	if _play_skill(key, volume_db, cooldown_sec):
+		cooldown_sec: float = REAL_SFX_COOLDOWN_SEC, important: bool = false) -> void:
+	if _play_skill(key, volume_db, cooldown_sec, 0.95, 1.05, important):
 		return
 	var definition: Dictionary = SKILL_SFX.get(key, {})
 	_play_procedural_fallback(String(definition.get("fallback", "gather_tick")))
 
 
+## 程序化兜底：调用方（循环拟音闸门 / 主动交互）已完成节流，此处只发声不再二次闸门
 func _play_procedural_fallback(key: String) -> void:
 	match key:
 		"craft_success":
-			play_craft()
+			_play_craft_raw()
 		"coin_chime":
-			_play("coin_chime", -7.0, "coin_chime", 0.07)
+			_play("coin_chime", -7.0, "coin_chime", 0.07, true)
 		"thunder_hit":
-			_play("thunder_hit", -3.0, "thunder_hit", 0.10)
+			_play("thunder_hit", -3.0, "thunder_hit", 0.10, true)
 		"breakthrough":
-			_play("breakthrough", -4.0, "breakthrough", 0.40)
+			_play("breakthrough", -4.0, "breakthrough", 0.40, true)
 		"ui_paper":
 			_play("ui_paper", -13.0, "ui_paper", 0.08)
 		"gather_tick":
-			play_gather_tick()
+			_play_gather_tick_raw()
 		_:
 			play_tap()
 
@@ -656,38 +679,57 @@ func play_paper() -> void:
 
 
 func play_gather_tick() -> void:
+	if _loop_gate():
+		_play_gather_tick_raw()
+
+
+## 采集轻拨（不含全局闸门）：循环拟音调用方已统一过闸，避免二次拦截
+func _play_gather_tick_raw() -> void:
 	var index := _rng.randi_range(0, GATHER_NOTES.size() - 1)
-	_play("gather_tick_%d" % index, -13.0, "gather_tick", 0.09)
+	_play("gather_tick_%d" % index, LOOP_GATHER_DB, "gather_tick", LOOP_SFX_COOLDOWN_SEC)
+
+
+## 灵潭收竿：与百艺循环拟音共用同一闸门，垂钓页优先但依旧不叠音
+func play_fishing_catch() -> void:
+	if _loop_gate():
+		_play_gather_tick_raw()
 
 
 func play_coin() -> void:
-	_play_skill_with_fallback("coin_chime", -1.5, 0.08)
+	_play_skill_with_fallback("coin_chime", -1.5, 0.08, true)
 
 
 func play_craft() -> void:
-	_play("craft_success", -7.0, "craft_success", 0.09)
+	if _loop_gate():
+		_play_craft_raw()
+
+
+func _play_craft_raw() -> void:
+	_play("craft_success", LOOP_CRAFT_DB, "craft_success", LOOP_SFX_COOLDOWN_SEC)
 
 
 func play_level_up() -> void:
 	# 技能升级复用突破钟声，但压低音量并略升音高，与大境界突破区分
-	if not _play_skill("breakthrough", -6.0, 0.12, 1.0, 1.06):
-		_play("level_up", -6.0, "level_up", 0.10)
+	if not _play_skill("breakthrough", -6.0, 0.12, 1.0, 1.06, true):
+		_play("level_up", -6.0, "level_up", 0.10, true)
 
 
 func play_breakthrough() -> void:
-	_play_skill_with_fallback("breakthrough", -1.5, 0.40)
+	_play_skill_with_fallback("breakthrough", -1.5, 0.40, true)
 
 
 func play_thunder() -> void:
-	_play_skill_with_fallback("thunder_hit", -2.0, 0.10)
+	_play_skill_with_fallback("thunder_hit", -2.0, 0.10, true)
 
 
 func play_combat_sword() -> void:
-	_play_skill_with_fallback("combat_sword", -6.0, 0.08)
+	if not _loop_gate():
+		return
+	_play_skill_with_fallback("combat_sword", LOOP_COMBAT_DB, LOOP_SFX_COOLDOWN_SEC)
 
 
 func play_meditate() -> void:
-	_play_skill_with_fallback("skill_meditate", -5.0, 0.10)
+	_play_skill_with_fallback("skill_meditate", -9.5, LOOP_SFX_COOLDOWN_SEC)
 
 
 func play_farm_action() -> void:
@@ -808,8 +850,81 @@ func _vibration_available() -> bool:
 	return DisplayServer.window_is_focused()
 
 
+## 当前正在发声的短音效声部数（程序化轮询池 + 各技能真实拟音单播放器）
+func _active_voice_count(exclude: AudioStreamPlayer = null) -> int:
+	var count := 0
+	for player in _players:
+		if player != exclude and player.playing:
+			count += 1
+	for key in _skill_players.keys():
+		var player: AudioStreamPlayer = _skill_players[key]
+		if player != exclude and player.playing:
+			count += 1
+	return count
+
+
+## 并发上限：声部已满时优先停最早的低优先级循环音；
+## 突破 / 稀有掉落 / 渡劫等重要音标记了 voice_important，最后才被淘汰。
+func _ensure_voice_room(exclude: AudioStreamPlayer) -> void:
+	var guard := 0
+	while guard < 8 and _active_voice_count(exclude) >= MAX_SFX_VOICES:
+		guard += 1
+		var victim := _oldest_voice(exclude, false)
+		if victim == null:
+			victim = _oldest_voice(exclude, true)
+		if victim == null:
+			return
+		victim.stop()
+
+
+func _oldest_voice(exclude: AudioStreamPlayer, include_important: bool) -> AudioStreamPlayer:
+	var oldest: AudioStreamPlayer = null
+	var oldest_ms := 9223372036854775807
+	for player in _players:
+		if player == exclude or not player.playing:
+			continue
+		if not include_important and bool(player.get_meta("voice_important", false)):
+			continue
+		var started := int(player.get_meta("voice_start_msec", 0))
+		if started < oldest_ms:
+			oldest_ms = started
+			oldest = player
+	for key in _skill_players.keys():
+		var player: AudioStreamPlayer = _skill_players[key]
+		if player == exclude or not player.playing:
+			continue
+		if not include_important and bool(player.get_meta("voice_important", false)):
+			continue
+		var started := int(player.get_meta("voice_start_msec", 0))
+		if started < oldest_ms:
+			oldest_ms = started
+			oldest = player
+	return oldest
+
+
+## 循环拟音全局闸门：0.18s 内最多放行一条，多槽同帧完成只响一次
+func _loop_gate() -> bool:
+	var now := Time.get_ticks_msec()
+	if now - _last_loop_msec < LOOP_SFX_MIN_GAP_MS:
+		return false
+	_last_loop_msec = now
+	return true
+
+
+## 循环拟音发声权限：
+##   秘境 / 镇魔塔 / 灵潭垂钓 / 渡劫页 → 只保留本页节奏音，百艺整体静默
+##   其余页面：主修（槽 0）恒可发声；分神 / 化身仅当正在浏览对应百艺页
+func _routine_sfx_allowed(slot: int, action: ActionData) -> bool:
+	var page := EventBus.current_page
+	if FOREGROUND_RHYTHM_PAGES.has(page):
+		return false
+	if slot <= 0:
+		return true
+	return action != null and page == action.skill_id
+
+
 func _play(key: String, volume_db: float, cooldown_key: String = "",
-		cooldown_sec: float = 0.08) -> void:
+		cooldown_sec: float = 0.08, important: bool = false) -> void:
 	if not is_enabled():
 		return
 	var now := Time.get_ticks_msec()
@@ -822,15 +937,18 @@ func _play(key: String, volume_db: float, cooldown_key: String = "",
 		return
 	var player := _players[_cursor]
 	_cursor = (_cursor + 1) % _players.size()
+	_ensure_voice_room(player)
 	player.stream = stream
 	player.pitch_scale = _rng.randf_range(0.95, 1.05)
 	_start_player_fade(player, volume_db + linear_to_db(get_volume()),
-		SFX_FADE_IN_SEC, 10.0)
+		SFX_FADE_IN_SEC, 10.0, important)
 
 
 func _start_player_fade(player: AudioStreamPlayer, target_db: float,
-		fade_in: float, fade_depth: float) -> void:
+		fade_in: float, fade_depth: float, important: bool = false) -> void:
 	_kill_player_tween(player)
+	player.set_meta("voice_start_msec", Time.get_ticks_msec())
+	player.set_meta("voice_important", important)
 	player.volume_db = maxf(-60.0, target_db - fade_depth)
 	player.play()
 	var tween := player.create_tween()
@@ -900,31 +1018,43 @@ func _on_mastery_level_up(_action_id: String, _level: int) -> void:
 	play_level_up()
 
 
-func _on_action_completed(_slot: int, action_id: String, _gained: Dictionary) -> void:
+func _on_action_completed(slot: int, action_id: String, _gained: Dictionary) -> void:
 	var action := DataRegistry.get_action(action_id)
+	# 分神 / 化身后台结算默认静默；节奏页（秘境 / 镇魔塔 / 垂钓 / 渡劫）百艺整体静默
+	if action != null and not _routine_sfx_allowed(slot, action):
+		return
+	# 全局 0.18s 闸门：多槽同帧完成只响一次
+	if not _loop_gate():
+		return
 	if action == null:
-		play_gather_tick()
+		_play_gather_tick_raw()
 		return
 	var real_key := String(SKILL_ID_TO_SFX.get(action.skill_id, ""))
 	if real_key != "":
 		if real_key == "skill_meditate":
-			_play_skill_with_fallback(real_key, -5.0, 0.10)
+			_play_skill_with_fallback(real_key, LOOP_SFX_VOLUME_DB - 1.0,
+				LOOP_SFX_COOLDOWN_SEC)
 		else:
-			_play_skill_with_fallback(real_key)
+			_play_skill_with_fallback(real_key, LOOP_SFX_VOLUME_DB,
+				LOOP_SFX_COOLDOWN_SEC)
 		return
 	# 其他动作保持程序化古风音效
-	play_gather_tick()
+	_play_gather_tick_raw()
 
 
 ## 点击开始运转时立即给一次轻反馈，不必等完整动作周期
-func _on_action_started(_slot: int, action_id: String) -> void:
+func _on_action_started(slot: int, action_id: String) -> void:
 	var action := DataRegistry.get_action(action_id)
 	if action == null:
+		return
+	if not _routine_sfx_allowed(slot, action):
+		return
+	if not _loop_gate():
 		return
 	var real_key := String(SKILL_ID_TO_SFX.get(action.skill_id, ""))
 	if real_key == "":
 		return
-	_play_skill_with_fallback(real_key, -8.0, 0.10)
+	_play_skill_with_fallback(real_key, LOOP_SFX_VOLUME_DB - 0.5, LOOP_SFX_COOLDOWN_SEC)
 
 
 ## 停止运转时立刻收掉该技能的真实拟音，避免长音效继续拖尾
@@ -954,10 +1084,15 @@ func _on_tribulation_thunder(_index: int, _damage: int, _warded: bool,
 
 
 func _on_combat_player_attack(_damage: int, _crit: bool) -> void:
+	# 离开秘境 / 镇魔塔页面后，战斗可在后台继续，但普攻声不再抢音轨
+	if not COMBAT_SFX_PAGES.has(EventBus.current_page):
+		return
 	play_combat_sword()
 
 
 func _on_combat_thunder_talisman(_damage: int) -> void:
+	if not COMBAT_SFX_PAGES.has(EventBus.current_page):
+		return
 	play_thunder()
 
 

@@ -30,9 +30,6 @@ var _status_breath_tween: Tween
 var _locked_chip: PanelContainer
 var _locked_label: Label
 var _progress: ProgressBar
-## 运转末端灵光笔锋：4×4 宣纸白圆点 + 8×8 淡青玉光晕，仅运行时显示
-var _progress_tip: PanelContainer
-var _progress_glow: PanelContainer
 var _interval_label: Label
 var _material_label: RichTextLabel
 var _mastery_bar: ProgressBar
@@ -50,6 +47,8 @@ var _style_box: StyleBoxFlat
 var _last_running: bool = false
 var _last_locked: bool = false
 var _was_visible: bool = true
+## 脏标记：切页 / 隐藏期间的信号只置脏，切回时统一补刷一次，杜绝切页全量重排
+var _dirty: bool = true
 
 
 func setup(data: ActionData) -> void:
@@ -61,7 +60,7 @@ func setup(data: ActionData) -> void:
 	add_theme_stylebox_override("panel", _style_box)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_build()
-	refresh()
+	refresh(true)
 	ThemeBuilder.prepare_touch(self)
 
 
@@ -81,8 +80,8 @@ func _ready() -> void:
 	EventBus.technique_changed.connect(_on_equipment_changed)
 	EventBus.realm_changed.connect(_on_realm_changed)
 	visibility_changed.connect(_on_visibility_changed)
-	set_process(true)
-	refresh()
+	set_process(is_visible_in_tree())
+	refresh(true)
 
 
 func _process(_delta: float) -> void:
@@ -90,9 +89,11 @@ func _process(_delta: float) -> void:
 		return
 	var visible_now := is_visible_in_tree()
 	if not visible_now:
+		# 不可见即停表：切页后不再为空转卡片消耗每帧轮询（切回由 visibility_changed 唤醒）
 		if _was_visible:
 			_was_visible = false
 			_stop_status_breathing()
+		set_process(false)
 		return
 	if not _was_visible:
 		_was_visible = true
@@ -103,29 +104,14 @@ func _process(_delta: float) -> void:
 	if running != _last_running or locked != _last_locked:
 		_last_running = running
 		_last_locked = locked
+		_dirty = true
 		refresh()
 	if running and _progress != null:
 		_progress.value = ActionRunner.get_progress(slot)
 	elif _progress != null:
 		_progress.value = 0.0
-	_update_progress_tip(running, slot)
 
 
-## 运转条末端笔锋：x 夹在 [2, 轨道宽-2]，停止/未解锁隐藏
-func _update_progress_tip(running: bool, slot: int) -> void:
-	if _progress == null or _progress_tip == null or _progress_glow == null:
-		return
-	var unlocked := action != null \
-		and GameState.get_skill_level(action.skill_id) >= action.required_level
-	var visible_tip := running and unlocked
-	_progress_tip.visible = visible_tip
-	_progress_glow.visible = visible_tip
-	if not visible_tip:
-		return
-	var width := maxf(4.0, _progress.size.x)
-	var x := clampf(width * ActionRunner.get_progress(slot), 2.0, width - 2.0)
-	_progress_tip.position = Vector2(x - 2.0, (_progress.size.y - 4.0) * 0.5)
-	_progress_glow.position = Vector2(x - 4.0, (_progress.size.y - 8.0) * 0.5)
 
 
 func _action_verb() -> String:
@@ -251,29 +237,17 @@ func _build() -> void:
 	status_row.add_child(_status_label)
 	head.add_child(_status_chip)
 
-	_progress = ThemeBuilder.progress_bar(ThemeBuilder.COLOR_JADE, 6)
+	# 运转条：全站统一翠玉绿胶囊（6px，无突出端点圆点，与右栏三才条一致）
+	_progress = ThemeBuilder.progress_bar_run()
 	_progress.clip_contents = true
 	_box.add_child(_progress)
-	_progress_glow = PanelContainer.new()
-	_progress_glow.custom_minimum_size = Vector2(8, 8)
-	_progress_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_progress_glow.add_theme_stylebox_override("panel",
-		ThemeBuilder.circle_box(Color(ThemeBuilder.COLOR_JADE, 0.22), 8.0))
-	_progress_glow.visible = false
-	_progress.add_child(_progress_glow)
-	_progress_tip = PanelContainer.new()
-	_progress_tip.custom_minimum_size = Vector2(4, 4)
-	_progress_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_progress_tip.add_theme_stylebox_override("panel",
-		ThemeBuilder.circle_box(Color("#FCF9F2"), 4.0))
-	_progress_tip.visible = false
-	_progress.add_child(_progress_tip)
 
 	_material_label = RichTextLabel.new()
 	_material_label.bbcode_enabled = true
 	_material_label.fit_content = true
 	_material_label.scroll_active = false
-	_material_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# 按词折行 + NBSP 防断：材料名与「×N (存X)」不再被拆到两行
+	_material_label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_material_label.custom_minimum_size = Vector2(0, 0)
 	ThemeBuilder.apply_font_size(_material_label, ThemeBuilder.FONT_BODY_SUB, "normal_font_size")
 	_material_label.add_theme_color_override("default_color", ThemeBuilder.COLOR_TEXT_DIM)
@@ -283,8 +257,8 @@ func _build() -> void:
 	var mastery_row := ThemeBuilder.hbox(4)
 	_box.add_child(mastery_row)
 	mastery_row.add_child(ThemeBuilder.dim_label("火候", ThemeBuilder.FONT_BODY_SUB))
-	_mastery_bar = ThemeBuilder.progress_bar(ThemeBuilder.COLOR_AMBER, 6)
-	_mastery_bar.custom_minimum_size = Vector2(56, 6)
+	_mastery_bar = ThemeBuilder.progress_bar_grow()
+	_mastery_bar.custom_minimum_size = Vector2(56, ThemeBuilder.BAR_HEIGHT_GROW)
 	_mastery_bar.size_flags_horizontal = Control.SIZE_FILL
 	_mastery_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	mastery_row.add_child(_mastery_bar)
@@ -384,9 +358,14 @@ func _create_slot_button(slot_idx: int) -> Button:
 
 # ---------------------------------------------------------------- 刷新
 
-func refresh() -> void:
+## force = false 时若距上次刷新没有状态变化则直接跳过：
+## 切页 / 切回 / 无关信号都不再重排 RichTextLabel 与按钮样式。
+func refresh(force: bool = false) -> void:
 	if action == null:
 		return
+	if not force and not _dirty:
+		return
+	_dirty = false
 	var slot := GameState.get_slot_of_action(action.id)
 	var running := slot >= 0
 	var level := GameState.get_skill_level(action.skill_id)
@@ -410,11 +389,12 @@ func refresh() -> void:
 			_stop_status_breathing()
 
 	if running:
+		# 主修中 / 分神中 / 化身中：徽章、描边、进度条统一取对应槽位专属色
 		_apply_status_chip(GameState.get_slot_text(slot, "running"),
-			ThemeBuilder.COLOR_JADE, true)
+			ThemeBuilder.slot_dot_color(slot), true)
 	else:
 		_update_status_text(running, locked, lacks)
-	_apply_card_running(running)
+	_apply_card_running(running, slot)
 	# 三态互斥按钮行：A 运转 / B 缺料 / C 空闲（只切显隐与文案，不重建节点）
 	_render_button_row(slot, running, lacks, locked)
 
@@ -436,7 +416,7 @@ func _on_slot_pressed(slot: int) -> void:
 		return
 	if GameState.start_action_in_slot(action.id, slot):
 		GameState.vibrate_light()
-		refresh()
+		refresh(true)
 
 
 ## 三态互斥按钮行（唯一优先级入口，杜绝按钮混排）：
@@ -508,9 +488,10 @@ func _update_status_text(running: bool, locked: bool, lacks: bool) -> void:
 	if _status_label == null or locked:
 		return
 	if running:
+		# 主修中 / 分神中 / 化身中：文字与徽章色都跟随对应槽位
 		var slot := GameState.get_slot_of_action(action.id)
-		_apply_status_chip("主修中" if slot == 0 else "分神中",
-			ThemeBuilder.COLOR_JADE, true)
+		_apply_status_chip(GameState.get_slot_text(slot, "running"),
+			ThemeBuilder.slot_dot_color(slot), true)
 	elif lacks:
 		_apply_status_chip("原料不足", ThemeBuilder.COLOR_CINNABAR)
 	else:
@@ -603,47 +584,80 @@ func _refresh_material() -> void:
 	var c_gold := ThemeBuilder.hex(ThemeBuilder.COLOR_TEXT_GOLD)
 	var c_jade := ThemeBuilder.hex(ThemeBuilder.COLOR_TEXT_JADE)
 
-	if action.inputs.is_empty() and action.pill_item_id == "":
-		# 采集类直接展示产出，去掉“无需材料 →”前缀
-		if not action.is_gather():
+	if action.inputs.is_empty():
+		# 采集 / 吐纳等无原料卡片：保持原有单行「产出×N (存X)」展示不变
+		if action.pill_item_id == "" and not action.is_gather():
 			parts.append("[color=%s]无需材料[/color]" % c_muted)
-	else:
-		for item_id in action.inputs.keys():
-			var need_count := int(action.inputs[item_id])
+		var out_parts: Array[String] = []
+		for item_id in action.outputs.keys():
+			var per := int(action.outputs[item_id])
 			var have := GameState.get_item_count(String(item_id))
-			var short := have < need_count
-			# 名称按品阶着色；不足时数量与库存提示保留朱砂警示
-			var tail_color := c_danger if short else c_secondary
-			parts.append("%s[color=%s]×%d (存%s)[/color]" % [
+			out_parts.append("%s[color=%s]×%d (存%s)[/color]" % [
 				ThemeBuilder.format_item_grade_bbcode(String(item_id)),
-				tail_color, need_count, GameFormulas.format_num(float(have))])
-		if action.pill_item_id != "" and GameState.is_flag("auto_pill", false):
-			var pill_have := GameState.get_item_count(action.pill_item_id)
-			var pill_tail := c_danger if pill_have <= 0 else c_secondary
-			parts.append("%s[color=%s]×1 (存%d)[/color]" % [
-				ThemeBuilder.format_item_grade_bbcode(action.pill_item_id),
-				pill_tail, pill_have])
+				c_secondary, per, GameFormulas.format_num(float(have))])
+		if action.cultivation_gain > 0:
+			out_parts.append("[color=%s]修为+%d[/color]" % [
+				c_gold, GameState.get_meditate_cultivation_gain(action.id)])
+		if out_parts.is_empty():
+			out_parts.append("[color=%s]—[/color]" % c_muted)
+		var left_text := " + ".join(parts)
+		var right_text := " + ".join(out_parts)
+		var material_text := ("%s  →  %s" % [left_text, right_text]) \
+			if left_text != "" else right_text
+		var seed_drop := DataRegistry.get_seed_drop(action.id)
+		if not seed_drop.is_empty():
+			material_text += " [color=%s]+灵种[/color]" % c_jade
+		_material_label.text = ThemeBuilder.protect_phrases(material_text)
+		return
 
-	var out_parts: Array[String] = []
-	for item_id in action.outputs.keys():
-		var per := int(action.outputs[item_id])
+	# 制造类：原料只留「名称×数量」，缺料整项标红；产出另起一行，避免行尾悬空 + / →
+	var input_parts: Array[String] = []
+	for item_id in action.inputs.keys():
+		var need_count := int(action.inputs[item_id])
 		var have := GameState.get_item_count(String(item_id))
-		out_parts.append("%s[color=%s]×%d (存%s)[/color]" % [
-			ThemeBuilder.format_item_grade_bbcode(String(item_id)),
-			c_secondary, per, GameFormulas.format_num(float(have))])
-	if action.cultivation_gain > 0:
-		out_parts.append("[color=%s]修为+%d[/color]" % [
-			c_gold, GameState.get_meditate_cultivation_gain(action.id)])
-	if out_parts.is_empty():
-		out_parts.append("[color=%s]—[/color]" % c_muted)
+		var short := have < need_count
+		var name_bb := ThemeBuilder.format_item_grade_bbcode(String(item_id))
+		if short:
+			name_bb = "[color=%s]%s[/color]" % [c_danger,
+				DataRegistry.get_item_name(String(item_id))]
+		var qty_color := c_danger if short else c_secondary
+		input_parts.append("%s[color=%s]×%d[/color]" % [
+			name_bb, qty_color, need_count])
+	if action.pill_item_id != "" and GameState.is_flag("auto_pill", false):
+		var pill_have := GameState.get_item_count(action.pill_item_id)
+		var pill_short := pill_have <= 0
+		var pill_name := ThemeBuilder.format_item_grade_bbcode(action.pill_item_id)
+		if pill_short:
+			pill_name = "[color=%s]%s[/color]" % [c_danger,
+				DataRegistry.get_item_name(action.pill_item_id)]
+		input_parts.append("%s[color=%s]×1[/color]" % [pill_name,
+			c_danger if pill_short else c_secondary])
+	var input_line := " · ".join(input_parts)
 
-	var left_text := " + ".join(parts)
-	var right_text := " + ".join(out_parts)
-	_material_label.text = ("%s  →  %s" % [left_text, right_text]) if left_text != "" else right_text
-	# 副产不再单独占行：行尾只挂一个紧凑「+灵种 / +奇珍」小标签，概率等明细收进详情浮层
+	var output_line := ""
+	if action.outputs.size() == 1:
+		var out_id := String(action.outputs.keys()[0])
+		var per := int(action.outputs[out_id])
+		var have := GameState.get_item_count(out_id)
+		output_line = "每次产 ×%d · 持有 %s" % [per, GameFormulas.format_num(float(have))]
+	elif action.outputs.size() > 1:
+		var out_parts: Array[String] = []
+		for item_id in action.outputs.keys():
+			out_parts.append("%s×%d" % [
+				ThemeBuilder.format_item_grade_bbcode(String(item_id)),
+				int(action.outputs[item_id])])
+		output_line = "每次产 " + " · ".join(out_parts)
+	if action.cultivation_gain > 0:
+		output_line += (" · " if output_line != "" else "") \
+			+ "修为+%d" % GameState.get_meditate_cultivation_gain(action.id)
 	var seed_drop := DataRegistry.get_seed_drop(action.id)
 	if not seed_drop.is_empty():
-		_material_label.text += " [color=%s]+灵种[/color]" % c_jade
+		output_line += (" · " if output_line != "" else "") \
+			+ "[color=%s]+灵种[/color]" % c_jade
+	var material_text := input_line
+	if output_line != "":
+		material_text += "\n" + output_line
+	_material_label.text = ThemeBuilder.protect_phrases(material_text)
 
 
 func _refresh_mastery() -> void:
@@ -703,8 +717,11 @@ func _show_detail() -> void:
 	if not action.inputs.is_empty():
 		var inputs: Array[String] = []
 		for item_id in action.inputs.keys():
-			inputs.append("%s ×%d" % [DataRegistry.get_item_name(String(item_id)),
-				int(action.inputs[item_id])])
+			# 详情里保留精确库存，卡片上不写「(存xxx)」以保持紧凑
+			inputs.append("%s ×%d（存%s）" % [
+				DataRegistry.get_item_name(String(item_id)),
+				int(action.inputs[item_id]),
+				GameFormulas.format_num(float(GameState.get_item_count(String(item_id))))])
 		rows.append({
 			"label": "所需原料", "value": " · ".join(inputs),
 			"color": ThemeBuilder.COLOR_TEXT_PRIMARY,
@@ -722,6 +739,15 @@ func _show_detail() -> void:
 		"value": "%.0f%%" % (ActionRunner.get_double_chance(action.id) * 100.0),
 		"color": ThemeBuilder.COLOR_TEXT_JADE,
 	})
+	if action.skill_id == "alchemy":
+		# 洞府灵气反哺：与 FarmPanel 同一动态出口，不再写死 8%
+		var farm_aura := GameState.get_farm_aura_alchemy_bonus()
+		if farm_aura > 0.0001:
+			rows.append({
+				"label": "洞府灵气反哺",
+				"value": "+%.0f%%" % (farm_aura * 100.0),
+				"color": ThemeBuilder.COLOR_TEXT_JADE,
+			})
 	var seed_drop := DataRegistry.get_seed_drop(action.id)
 	if not seed_drop.is_empty():
 		rows.append({
@@ -744,7 +770,7 @@ func _show_detail() -> void:
 		note += "\n本次采获为单次所得，采集时另有灵种机缘。"
 	else:
 		note += "\n配方产出为单次所得，所需原料在运转时逐轮消耗。"
-	note += "\n双倍产出受火候、悟道池 50% / 95% 里程碑与坊市法器共同增益。"
+	note += "\n双倍产出受火候、悟道池里程碑与坊市法器增益；丹道另享洞府灵气反哺。"
 	BottomSheet.show_detail({
 		"title": action.display_name,
 		"icon": _pick_icon_texture(),
@@ -762,7 +788,7 @@ func _on_start_pressed() -> void:
 	if slot >= 0:
 		GameState.stop_action(slot)
 		GameState.vibrate_light()
-		refresh()
+		refresh(true)
 		return
 	if GameState.get_skill_level(action.skill_id) < action.required_level:
 		return
@@ -773,7 +799,7 @@ func _on_start_pressed() -> void:
 	GameState.start_action(action.id)
 	if GameState.get_slot_of_action(action.id) >= 0:
 		GameState.vibrate_light()
-	refresh()
+	refresh(true)
 
 
 ## 缺 1 种：直达最高优先级来源；缺多种：弹出获取指引
@@ -851,24 +877,36 @@ func _on_refine_pressed() -> void:
 	if is_visible_in_tree() and _icon_frame != null and InkVfxLayer.instance != null:
 		InkVfxLayer.instance.play_hammer(_icon_frame.get_global_rect().get_center(),
 			InkVfxLayer.INK_JADE, InkVfxLayer.INK_GOLD)
-	refresh()
+	refresh(true)
 
 
-## 运转中的卡片才亮起玉青描边与极淡青色内底
-func _apply_card_running(running: bool) -> void:
+## 运转中的卡片才亮起对应槽位专属色描边、极淡同色内底与同色运转条
+func _apply_card_running(running: bool, slot: int = 0) -> void:
 	if _style_box == null:
 		return
+	var accent := ThemeBuilder.slot_dot_color(slot)
 	_style_box.bg_color = ThemeBuilder.card_color(
-		ThemeBuilder.COLOR_JADE_PAPER if running else ThemeBuilder.COLOR_CARD)
-	_style_box.border_color = ThemeBuilder.COLOR_JADE if running else ThemeBuilder.COLOR_BORDER
+		ThemeBuilder.slot_paper_color(slot) if running else ThemeBuilder.COLOR_CARD)
+	_style_box.border_color = accent if running else ThemeBuilder.COLOR_BORDER
 	_style_box.set_border_width_all(2 if running else 1)
+	if _progress != null:
+		# 6px 胶囊、无端点圆头；只换只读样式引用
+		ThemeBuilder.set_bar_fill(_progress,
+			accent if running else ThemeBuilder.COLOR_BAR_RUN)
 
 
 # ---------------------------------------------------------------- 信号
 
+## 隐藏卡片只置脏，切回时统一补刷一次（切页不再被动触发整页重排）
+func _mark_dirty_and_refresh() -> void:
+	_dirty = true
+	if is_visible_in_tree():
+		refresh()
+
+
 func _on_action_state_signal(_slot: int, action_id: String) -> void:
 	if action != null and action_id == action.id:
-		refresh()
+		_mark_dirty_and_refresh()
 
 
 func _on_action_completed(_slot: int, action_id: String, gained: Dictionary) -> void:
@@ -957,11 +995,17 @@ func _pick_icon_accent() -> Color:
 
 func _on_mastery_changed(action_id: String, _xp: float, _level: int) -> void:
 	if action != null and action_id == action.id:
+		if not is_visible_in_tree():
+			_dirty = true
+			return
 		_refresh_mastery()
 
 
 func _on_pool_changed(skill_id: String, _current: float, _capacity: float) -> void:
 	if action != null and skill_id == action.skill_id:
+		if not is_visible_in_tree():
+			_dirty = true
+			return
 		_refresh_stats_line()
 		_refresh_mastery()
 		_update_refine_button()
@@ -969,7 +1013,7 @@ func _on_pool_changed(skill_id: String, _current: float, _capacity: float) -> vo
 
 func _on_skill_xp_changed(skill_id: String, _xp: float, _level: int) -> void:
 	if action != null and skill_id == action.skill_id:
-		refresh()
+		_mark_dirty_and_refresh()
 
 
 ## 脏标记合并刷新：同帧多信号只重绘一次
@@ -985,7 +1029,7 @@ func _queue_refresh() -> void:
 
 func _do_queued_refresh() -> void:
 	_refresh_queued = false
-	refresh()
+	_mark_dirty_and_refresh()
 
 
 func _on_equipment_changed() -> void:
@@ -1000,8 +1044,10 @@ func _on_visibility_changed() -> void:
 	var vis := is_visible_in_tree()
 	_was_visible = vis
 	if vis:
+		set_process(true)
 		refresh()
 	else:
 		_stop_status_breathing()
+		set_process(false)
 
 

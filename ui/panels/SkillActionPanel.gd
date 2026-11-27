@@ -39,8 +39,9 @@ var _tm_bonus: Label
 var _list_root: VBoxContainer
 var _fold_low: PanelContainer
 var _fold_high: PanelContainer
-var _fold_low_box: VBoxContainer
-var _fold_high_box: VBoxContainer
+## 折叠区在宽屏与主网格同规则分列（2/4 张 2 列，其余 3 列）
+var _fold_low_box: GridContainer
+var _fold_high_box: GridContainer
 var _fold_low_label: Label
 var _fold_high_label: Label
 var _fold_low_arrow: Label
@@ -53,6 +54,10 @@ var _mode: int = EventBus.LayoutMode.COMPACT
 
 var _cards: Dictionary = {}
 var _is_dirty: bool = false
+## 隐藏期间的卡片状态变化（库存 / 槽位占用）：切回时一次性补刷
+var _cards_dirty: bool = false
+## 隐藏期间的四段分区顺序变化：切回时补一次重排
+var _layout_stale: bool = false
 
 
 func _ready() -> void:
@@ -67,19 +72,52 @@ func _ready() -> void:
 func _on_layout_changed(mode: int, _vp_size: Vector2, workspace_width: float) -> void:	_apply_layout(mode, workspace_width)
 
 
-## 宽屏：经验卡与悟道池左右并排；卡片多列
-func _apply_layout(mode: int, workspace_width: float) -> void:
+## 布局：竖屏恒 1 列、中屏 2 列、宽屏按可见卡片数动态 1/2/3 列
+func _apply_layout(mode: int, _workspace_width: float) -> void:
 	_mode = mode
+	_update_grid_columns()
+
+
+## 列数唯一口径：
+##   竖屏 COMPACT → 恒 1 列（断点行为与改造前完全一致）
+##   中屏 MEDIUM  → 2 列（仅 1 张时为 1）
+##   宽屏 WIDE    → 1 张 1 列；2 / 4 张 2 列（2×2 对称饱满）；3 张及 5 张以上 3 列
+## 宽屏不再出现「上 3 下 1」的孤立尾卡留白。
+func _columns_for_count(count: int, mode: int) -> int:
+	match mode:
+		EventBus.LayoutMode.COMPACT:
+			return 1
+		EventBus.LayoutMode.MEDIUM:
+			return 1 if count <= 1 else 2
+		_:
+			if count <= 1:
+				return 1
+			if count == 2 or count == 4:
+				return 2
+			return 3
+
+
+## 主网格与两个折叠区各自按「自身当前卡片数」重算列数，并确保卡片水平铺满
+func _update_grid_columns() -> void:
 	if _cards_grid != null:
-		var columns := 1
-		if workspace_width >= 1060.0:
-			columns = 3
-		elif workspace_width >= 680.0:
-			columns = 2
-		_cards_grid.columns = columns
-		for child in _cards_grid.get_children():
-			if child is Control:
-				(child as Control).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_apply_columns(_cards_grid, _cards_grid.get_child_count(), false)
+	if _fold_low_box != null:
+		_apply_columns(_fold_low_box, _fold_low_box.get_child_count(), true)
+	if _fold_high_box != null:
+		_apply_columns(_fold_high_box, _fold_high_box.get_child_count(), true)
+
+
+func _apply_columns(grid: GridContainer, count: int, fold_area: bool) -> void:
+	if grid == null:
+		return
+	# 折叠区只在宽屏分列；竖屏 / 中屏维持改造前的单列折叠，断点行为零变化
+	if fold_area and _mode != EventBus.LayoutMode.WIDE:
+		grid.columns = 1
+	else:
+		grid.columns = _columns_for_count(count, _mode)
+	for child in grid.get_children():
+		if child is Control:
+			(child as Control).size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 
 func _build() -> void:
@@ -241,7 +279,10 @@ func _build() -> void:
 	_fold_low_label = fold_low[1]
 	_fold_low_arrow = fold_low[2]
 	_list_root.add_child(_fold_low)
-	_fold_low_box = ThemeBuilder.vbox(10)
+	_fold_low_box = GridContainer.new()
+	_fold_low_box.columns = 1
+	_fold_low_box.add_theme_constant_override("h_separation", 10)
+	_fold_low_box.add_theme_constant_override("v_separation", 10)
 	_fold_low_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list_root.add_child(_fold_low_box)
 	var fold_high := _make_fold_bar()
@@ -249,21 +290,17 @@ func _build() -> void:
 	_fold_high_label = fold_high[1]
 	_fold_high_arrow = fold_high[2]
 	_list_root.add_child(_fold_high)
-	_fold_high_box = ThemeBuilder.vbox(10)
+	_fold_high_box = GridContainer.new()
+	_fold_high_box.columns = 1
+	_fold_high_box.add_theme_constant_override("h_separation", 10)
+	_fold_high_box.add_theme_constant_override("v_separation", 10)
 	_fold_high_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list_root.add_child(_fold_high_box)
 	ThemeBuilder.make_card_tappable(_fold_low, _toggle_low_fold)
 	ThemeBuilder.make_card_tappable(_fold_high, _toggle_high_fold)
 
-	for action in DataRegistry.get_actions_for_skill(skill_id):
-		var card := ActionCard.new()
-		card.name = "Card_%s" % action.id
-		card.setup(action)
-		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		card.glossary_requested.connect(_open_glossary_sheet)
-		_cards_grid.add_child(card)
-		_cards[action.id] = card
-
+	# 卡片按需构建：首屏只建顶部 4 张，往阶 / 更高阶折叠区点开「展开」才创建。
+	# 杜绝「丹道 25 张卡 + 数十张图标」在首次进入同帧一次性构建造成的长卡顿。
 	ThemeBuilder.prepare_touch(_shell)
 	_layout_sections()
 
@@ -445,19 +482,56 @@ func _move_card(action_id: String, parent: Node) -> void:
 func _layout_sections() -> void:
 	if _cards_grid == null:
 		return
+	var sections := _classify_sections()
+	var grid_actions: Array = sections["grid"]
+	var low_actions: Array = sections["low"]
+	var high_actions: Array = sections["high"]
+
+	# 顶部区始终实建；折叠区未展开时只登记数量，不创建任何卡片节点
+	var grid_nodes: Array[Control] = []
+	for action_value in grid_actions:
+		grid_nodes.append(_ensure_card(action_value as ActionData))
+	for i in range(grid_nodes.size()):
+		_place_node(grid_nodes[i], _cards_grid, i)
+	if _fold_low_open:
+		for i in range(low_actions.size()):
+			_place_node(_ensure_card(low_actions[i] as ActionData), _fold_low_box, i)
+	if _fold_high_open:
+		for i in range(high_actions.size()):
+			_place_node(_ensure_card(high_actions[i] as ActionData), _fold_high_box, i)
+
+	_fold_low.visible = not low_actions.is_empty()
+	_fold_low_box.visible = _fold_low_open and not low_actions.is_empty()
+	_fold_low_label.text = _fold_low_title(low_actions)
+	_fold_low_label.add_theme_color_override("font_color",
+		ThemeBuilder.COLOR_TEXT_JADE if _fold_low_open else ThemeBuilder.COLOR_TEXT_PRIMARY)
+	_fold_low_arrow.text = "收起 ▾" if _fold_low_open else "展开 ▸"
+	_fold_high.visible = not high_actions.is_empty()
+	_fold_high_box.visible = _fold_high_open and not high_actions.is_empty()
+	_fold_high_label.text = _fold_high_title(high_actions.size())
+	_fold_high_label.add_theme_color_override("font_color",
+		ThemeBuilder.COLOR_TEXT_JADE if _fold_high_open else ThemeBuilder.COLOR_TEXT_PRIMARY)
+	_fold_high_arrow.text = "收起 ▾" if _fold_high_open else "展开 ▸"
+	# 主网格 / 折叠区卡片数变化后立即重算列数（宽屏 4 张走 2×2）
+	_update_grid_columns()
+
+
+## 四段分区分类（只读 ActionData，不依赖卡片是否已创建）：
+## 运转置顶 > 已解锁按解锁等级降序 > 未解锁升序；恒定 4 张占顶。
+func _classify_sections() -> Dictionary:
 	var running: Array[ActionData] = []
 	var unlocked: Array[ActionData] = []
 	var locked: Array[ActionData] = []
-	for action_id in _cards.keys():
-		var card: ActionCard = _cards[action_id]
-		if card == null or card.action == null:
+	for action_value in DataRegistry.get_actions_for_skill(skill_id):
+		var action := action_value as ActionData
+		if action == null:
 			continue
-		if GameState.get_action_running_slot(card.action.id) >= 0:
-			running.append(card.action)
-		elif GameState.get_skill_level(skill_id) >= card.action.required_level:
-			unlocked.append(card.action)
+		if GameState.get_action_running_slot(action.id) >= 0:
+			running.append(action)
+		elif GameState.get_skill_level(skill_id) >= action.required_level:
+			unlocked.append(action)
 		else:
-			locked.append(card.action)
+			locked.append(action)
 	running.sort_custom(func(a: ActionData, b: ActionData) -> bool:
 		return GameState.get_slot_of_action(a.id) < GameState.get_slot_of_action(b.id))
 	unlocked.sort_custom(func(a: ActionData, b: ActionData) -> bool:
@@ -471,42 +545,35 @@ func _layout_sections() -> void:
 	ordered.append_array(running)
 	ordered.append_array(unlocked)
 	ordered.append_array(locked)
+	var grid: Array[ActionData] = []
 	var low: Array[ActionData] = []
-
-	# 显式组装顺序数组，严禁在遍历 get_children() 时原地 move_child
-	# （索引漂移会让首项漏排：曾导致「运转中卡片被滞留的旧卡挤到第二位」）
-	var grid_nodes: Array[Control] = []
-	var high_nodes: Array[Control] = []
+	var high: Array[ActionData] = []
 	var skill_level := GameState.get_skill_level(skill_id)
 	for i in range(ordered.size()):
 		var action := ordered[i]
 		if i < visible_count:
-			grid_nodes.append(_cards[action.id])
+			grid.append(action)
 		elif skill_level < action.required_level:
-			high_nodes.append(_cards[action.id])
+			high.append(action)
 		else:
 			low.append(action)
+	return {"grid": grid, "low": low, "high": high}
 
-	# 标准归位循环：逐容器按显式顺序从 index 0 起排定
-	for i in range(grid_nodes.size()):
-		_place_node(grid_nodes[i], _cards_grid, i)
-	for i in range(low.size()):
-		_place_node(_cards[low[i].id], _fold_low_box, i)
-	for i in range(high_nodes.size()):
-		_place_node(high_nodes[i], _fold_high_box, i)
 
-	_fold_low.visible = not low.is_empty()
-	_fold_low_box.visible = _fold_low_open and not low.is_empty()
-	_fold_low_label.text = _fold_low_title(low)
-	_fold_low_label.add_theme_color_override("font_color",
-		ThemeBuilder.COLOR_TEXT_JADE if _fold_low_open else ThemeBuilder.COLOR_TEXT_PRIMARY)
-	_fold_low_arrow.text = "收起 ▾" if _fold_low_open else "展开 ▸"
-	_fold_high.visible = not high_nodes.is_empty()
-	_fold_high_box.visible = _fold_high_open and not high_nodes.is_empty()
-	_fold_high_label.text = _fold_high_title(high_nodes.size())
-	_fold_high_label.add_theme_color_override("font_color",
-		ThemeBuilder.COLOR_TEXT_JADE if _fold_high_open else ThemeBuilder.COLOR_TEXT_PRIMARY)
-	_fold_high_arrow.text = "收起 ▾" if _fold_high_open else "展开 ▸"
+## 按需建卡：同一动作只建一次；折叠区卡片点开「展开」后才真正实例化
+func _ensure_card(action: ActionData) -> ActionCard:
+	if action == null:
+		return null
+	var existing: ActionCard = _cards.get(action.id, null)
+	if existing != null and is_instance_valid(existing):
+		return existing
+	var card := ActionCard.new()
+	card.name = "Card_%s" % action.id
+	card.setup(action)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.glossary_requested.connect(_open_glossary_sheet)
+	_cards[action.id] = card
+	return card
 
 
 ## 折叠栏主标题按百艺类别命名，副标按未满火候项数切换，紧凑单行不折行。
@@ -554,17 +621,23 @@ func _place_node(node: Control, parent: Control, index: int) -> void:
 	parent.move_child(node, index)
 
 
-## 来源跳转目标在折叠区内时自动展开（在 focus_action 滚动前调用）
+## 来源跳转目标在折叠区内时自动展开（按分类判断，不依赖卡片是否已创建）
 func _expand_for(action_id: String) -> void:
-	var card: Control = _cards.get(action_id, null)
-	if card == null:
-		return
-	if _fold_low_box != null and _fold_low_box.is_ancestor_of(card) and not _fold_low_open:
+	var sections := _classify_sections()
+	if _list_has_action(sections["low"], action_id) and not _fold_low_open:
 		_fold_low_open = true
 		_layout_sections()
-	elif _fold_high_box != null and _fold_high_box.is_ancestor_of(card) and not _fold_high_open:
+	elif _list_has_action(sections["high"], action_id) and not _fold_high_open:
 		_fold_high_open = true
 		_layout_sections()
+
+
+func _list_has_action(list: Array, action_id: String) -> bool:
+	for value in list:
+		var action := value as ActionData
+		if action != null and action.id == action_id:
+			return true
+	return false
 
 
 # ---------------------------------------------------------------- 百艺与悟道图解
@@ -660,11 +733,15 @@ func _open_glossary_sheet() -> void:
 
 ## 从来源跳转回来时滚动到目标动作卡片，并做一次玉青描边提示
 func focus_action(action_id: String) -> void:
+	# 目标在折叠区内时先自动展开（展开过程会按需建卡），再滚动定位
+	_expand_for(action_id)
 	var card: Control = _cards.get(action_id, null)
 	if card == null:
-		return
-	# 目标在折叠区内时先自动展开，再滚动定位（缺料来源跳转永不失灵）
-	_expand_for(action_id)
+		var target_action := DataRegistry.get_action(action_id)
+		if target_action == null:
+			return
+		card = _ensure_card(target_action)
+		_layout_sections()
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if _scroll != null and is_instance_valid(card):
@@ -687,7 +764,16 @@ func _on_visibility_changed() -> void:
 	if not is_visible_in_tree():
 		return
 	# 切回本页先同步卡片槽位占用态（其它百艺可能刚启停动作）
-	_refresh_cards()
+	# 隐藏期间的库存 / 槽位变化统一记在 _cards_dirty，此处只补刷一次
+	if _cards_dirty:
+		_cards_dirty = false
+		_refresh_cards(true)
+	else:
+		_refresh_cards(false)
+	if _layout_stale and not _layout_queued:
+		_layout_stale = false
+		_layout_queued = true
+		call_deferred("_deferred_sections")
 	if not _is_dirty:
 		return
 	_is_dirty = false
@@ -695,12 +781,13 @@ func _on_visibility_changed() -> void:
 	refresh_pool()
 
 
-## 同步所有动作卡按钮行（空闲高亮 / 占用显示动作名）；只改文案与样式
-func _refresh_cards() -> void:
+## 同步所有动作卡按钮行（空闲高亮 / 占用显示动作名）；只改文案与样式。
+## force = false 时仅刷新「已置脏」的卡片，切页不会整页重排。
+func _refresh_cards(force: bool = false) -> void:
 	for action_id in _cards.keys():
 		var card: ActionCard = _cards[action_id]
 		if card != null and is_instance_valid(card):
-			card.refresh()
+			card.refresh(force)
 
 
 ## 顶栏槽位轻点跳转：直接切到对应百艺并高亮定位正在运转的动作卡
@@ -736,8 +823,13 @@ func _on_game_loaded() -> void:
 
 
 func _on_action_changed(_slot: int, _action_id: String) -> void:
+	# 隐藏页只记账：切回时再统一补刷，避免后台百艺启停把当前页拖慢
+	if not is_visible_in_tree():
+		_cards_dirty = true
+		_layout_stale = true
+		return
 	# 同步全部卡片的槽位占用态（只改按钮文案/样式，不重建节点）
-	_refresh_cards()
+	_refresh_cards(true)
 	# 重排会 reparent 卡片：必须延后到下一帧执行，否则在本帧「按钮 pressed 信号链」里
 	# remove_child/add_child 会打断点击处理（真机表现：按钮点不动、要连点好几次）
 	if _layout_queued:
@@ -761,6 +853,7 @@ func _on_combat_state_changed(_arg: String) -> void:
 func _on_inventory_changed() -> void:
 	# 脏标记合并：同帧多信号只刷新一次；隐藏页延后到切回时补刷
 	if not is_visible_in_tree():
+		_cards_dirty = true
 		return
 	if _cards_refresh_queued:
 		return
@@ -774,8 +867,9 @@ var _cards_refresh_queued := false
 func _do_cards_refresh() -> void:
 	_cards_refresh_queued = false
 	if not is_visible_in_tree():
+		_cards_dirty = true
 		return
-	_refresh_cards()
+	_refresh_cards(true)
 
 
 func _on_realm_changed(_realm_id: String, _realm_name: String) -> void:

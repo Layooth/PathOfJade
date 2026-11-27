@@ -72,9 +72,9 @@ const SKILL_PANEL_KEYS: Array[String] = [
 const DRAWER_GROUPS: Array = [
 	{"title": "采集三艺", "items": ["herbalism", "woodcutting", "mining"]},
 	{"title": "丹器符与修行", "items": ["alchemy", "forging", "talisman", "cultivation"]},
-	{"title": "道身与大道", "items": ["spirit_root", "natal_artifact", "five_elements", "tribulation"]},
+	{"title": "道身与大道", "items": ["character", "spirit_root", "natal_artifact", "five_elements", "tribulation"]},
 	{"title": "秘境与洞府", "items": ["combat", "tower", "farm", "fishing_tea", "shop"]},
-	{"title": "仙盟与道藏", "items": ["bounty", "mail", "technique", "codex", "leaderboard"]},
+	{"title": "仙盟与道藏", "items": ["inventory", "bounty", "mail", "technique", "codex", "leaderboard"]},
 	{"title": "系统", "items": ["settings"]},
 ]
 ## 高阶玩法阶梯门槛：抽屉显示锁定标记，面板自身展示锁定说明卡；历史数据不清空
@@ -236,6 +236,11 @@ var _side_line_right: ColorRect
 var _layout_mode: int = EventBus.LayoutMode.COMPACT
 var _workspace_width: float = 540.0
 var _layout_dirty: bool = false
+## 桌面窗口动态缩放：逻辑画布立即跟随，重布局在停手后合并一次（防拖拽卡顿）
+const RESIZE_DEBOUNCE_MS: int = 60
+var _cached_window_size: Vector2i = Vector2i.ZERO
+var _resize_dirty: bool = false
+var _resize_last_ms: int = 0
 
 var _topbar: PanelContainer
 var _bottom_nav: PanelContainer
@@ -273,9 +278,17 @@ var _nav_dots: Dictionary = {}
 var _nav_icons: Dictionary = {}
 var _nav_labels: Dictionary = {}
 var _nav_active_key: String = ""
+## 底栏导航两块样式常驻复用：切页不再反复分配 StyleBoxFlat
+var _nav_style_idle: StyleBoxFlat
+var _nav_style_active: StyleBoxFlat
+## 导航 / 抽屉内容签名：与上次一致时直接跳过整轮刷新（切页最常见路径）
+var _nav_sig: String = ""
 var _panels: Dictionary = {}
 var _current_key: String = ""
 var _last_skill_key: String = "herbalism"
+## 图标空闲预热：每个空闲帧只光栅化少量图标，避免首次打开分页同帧集中解码
+var _preheat_queue: Array[Callable] = []
+var _preheat_running: bool = false
 
 var _drawer_layer: Control
 var _drawer: PanelContainer
@@ -300,6 +313,8 @@ var _cloud_dialog: CloudConflictDialog
 var _boot_overlay: BootSplashOverlay
 var _last_realm_id: String = ""
 var _dual_notified: bool = false
+## 每次进主界面只检查一次热更志，避免切页/重进重复弹
+var _patch_notes_checked: bool = false
 
 
 func _ready() -> void:
@@ -345,7 +360,7 @@ func _ready() -> void:
 	_connect_optional_signal(EventBus, "toast", _show_toast)
 	_connect_optional_signal(EventBus, "floating_text", _on_floating_text)
 	_connect_optional_signal(EventBus, "stats_changed", _refresh_topbar)
-	_connect_optional_signal(EventBus, "stats_changed", _refresh_drawer)
+	_connect_optional_signal(EventBus, "stats_changed", _request_drawer_refresh)
 	_connect_optional_signal(EventBus, "equipment_changed", _refresh_topbar)
 	_connect_optional_signal(EventBus, "inventory_changed", _refresh_stones)
 	_connect_optional_signal(EventBus, "inventory_changed", _on_drawer_attention_changed)
@@ -364,11 +379,11 @@ func _ready() -> void:
 	_connect_optional_signal(EventBus, "codex_scripture_requested", _on_codex_scripture_requested)
 	_connect_optional_signal(EventBus, "shop_changed", _refresh_all)
 	_connect_optional_signal(EventBus, "bounty_changed", _on_drawer_attention_changed)
-	_connect_optional_signal(EventBus, "technique_changed", _refresh_drawer)
+	_connect_optional_signal(EventBus, "technique_changed", _request_drawer_refresh)
 	_connect_optional_signal(EventBus, "farm_changed", _on_farm_state_changed)
 	_connect_optional_signal(EventBus, "combat_enemy_defeated", _on_enemy_defeated_attention)
-	if get_viewport() != null:
-		get_viewport().size_changed.connect(_on_viewport_resized)
+	_connect_window_resize()
+	set_process(true)
 
 	var had_save := SaveManager.has_save()
 	SaveManager.load_game()
@@ -379,6 +394,10 @@ func _ready() -> void:
 	_refresh_all()
 	# 先把默认首页显示出来，再做可选云同步/角标刷新；后者异常也不会留下中心空白
 	_show_panel(_last_skill_key)
+	# 常用百艺 / 导航 / 页面图标在空闲帧分批预热，避免首次进入某分页时同帧集中光栅化
+	_preheat_common_icons()
+	# 热更后首次进入仙府：等启动遮罩与离线结算收尾后，再展示未读「玉简更新志」
+	_maybe_show_patch_notes()
 	_on_mail_unread_changed(_cloud_unread_count())
 	if not had_save:
 		_show_toast("初入道途：先在「采药寻灵」开始运转一门功法")
@@ -431,6 +450,71 @@ func _cloud_unread_count() -> int:
 		return 0
 	var value: Variant = CloudSaveManager.get("unread_mail_count")
 	return 0 if value == null else maxi(0, int(value))
+
+
+## 热更后首次进入：当前卷号大于 last_seen_notes_rev 时弹一次「玉简更新志」。
+## 只有点「已知晓」才写已读回执；划掉遮罩不算已读，下次仍会提醒。
+func _maybe_show_patch_notes() -> void:
+	if _patch_notes_checked:
+		return
+	_patch_notes_checked = true
+	if CloudSaveManager == null:
+		return
+	# 等启动水墨遮罩退场
+	var guard := 0
+	while guard < 180:
+		await get_tree().process_frame
+		guard += 1
+		if _boot_overlay == null or not is_instance_valid(_boot_overlay):
+			break
+	# 离线结算弹窗优先，玩家读完后我们再接上更新志
+	guard = 0
+	while guard < 600 and _modal != null and is_instance_valid(_modal) and _modal.visible:
+		await get_tree().process_frame
+		guard += 1
+	var current := CloudSaveManager.get_current_patch_rev()
+	if current <= 0:
+		return
+	var unseen := CloudSaveManager.get_unseen_patch_notes(current)
+	if unseen.is_empty():
+		return
+	var base_version := ThemeBuilder.APP_DISPLAY_VERSION
+	var rows: Array = []
+	var head := ThemeBuilder.vbox(4)
+	var head_chip := ThemeBuilder.chip("天道第 %d 卷" % current, ThemeBuilder.COLOR_JADE)
+	ThemeBuilder.apply_font_size(head_chip, ThemeBuilder.FONT_CAPTION)
+	head.add_child(head_chip)
+	var head_text := ThemeBuilder.wrap_label(
+		"当前版本 v%s · 天道第 %d 卷" % [base_version, current],
+		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_SECONDARY)
+	ThemeBuilder.apply_font_size(head_text, ThemeBuilder.FONT_CAPTION)
+	head.add_child(head_text)
+	rows.append({"custom": head})
+	for note_value in unseen:
+		var note: Dictionary = note_value
+		var card := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD_DEEP,
+			ThemeBuilder.COLOR_BORDER, 8, 10)
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var col := ThemeBuilder.vbox(4)
+		card.add_child(col)
+		var note_title := ThemeBuilder.label(
+			"天道第 %d 卷 · %s" % [int(note.get("rev", 0)),
+				CloudSaveManager.format_patch_date(String(note.get("created_at", "")))],
+			ThemeBuilder.FONT_BODY_SUB, ThemeBuilder.COLOR_TEXT_TITLE_GOLD)
+		ThemeBuilder.apply_font_size(note_title, ThemeBuilder.FONT_BODY_SUB)
+		col.add_child(note_title)
+		var body := ThemeBuilder.wrap_label(String(note.get("notes", "")),
+			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT)
+		ThemeBuilder.apply_font_size(body, ThemeBuilder.FONT_CAPTION)
+		col.add_child(body)
+		rows.append({"custom": card})
+	rows.append({
+		"text": "已知晓",
+		"color": ThemeBuilder.COLOR_TEXT_JADE,
+		"callback": func() -> void:
+			CloudSaveManager.mark_patch_notes_seen(current),
+	})
+	BottomSheet.show_text("玉简更新志", rows, ThemeBuilder.COLOR_TEXT_TITLE_GOLD)
 
 
 func _on_cloud_conflict_detected(local_summary: Dictionary,
@@ -487,8 +571,14 @@ func _on_mail_unread_changed(count: int) -> void:
 	_refresh_attention()
 
 
+## 侧栏从隐藏变可见（COMPACT→MEDIUM/WIDE）时补刷脏数据
+func _on_sidebar_slot_visibility() -> void:
+	if _sidebar_slot != null and _sidebar_slot.visible and _drawer_dirty:
+		_refresh_drawer()
+
+
 func _on_drawer_attention_changed() -> void:
-	_refresh_drawer()
+	_request_drawer_refresh()
 	_refresh_attention()
 
 
@@ -498,7 +588,7 @@ func _on_enemy_defeated_attention(_enemy_id: String, _loot: Dictionary) -> void:
 
 func _on_farm_state_changed() -> void:
 	_refresh_nav()
-	_refresh_drawer()
+	_request_drawer_refresh()
 
 
 # ---------------------------------------------------------------- 安全区
@@ -680,32 +770,71 @@ func _update_side_lines(side_left: float, side_right: float, vp_size: Vector2) -
 	_side_line_right.size = Vector2(1.0, line_height)
 
 
-func _on_viewport_resized() -> void:
-	_sync_content_scale()
-	call_deferred("_apply_safe_area")
+func _connect_window_resize() -> void:
+	_cached_window_size = DisplayServer.window_get_size()
+	var window := get_window()
+	# 根 Window 的 size_changed 在桌面拖拽时最可靠；Viewport 信号仅在独立 SubViewport 时补挂
+	if window != null and not window.size_changed.is_connected(_on_window_size_changed):
+		window.size_changed.connect(_on_window_size_changed)
+	var vp := get_viewport()
+	if vp != null and vp != window and not vp.size_changed.is_connected(_on_window_size_changed):
+		vp.size_changed.connect(_on_window_size_changed)
+
+
+## 窗口尺寸变化：先同步逻辑画布（防止等比缩放错位 / 横向压扁），重布局防抖到停手后
+func _on_window_size_changed() -> void:
+	var win := DisplayServer.window_get_size()
+	if win.x <= 0 or win.y <= 0:
+		return
+	if win == _cached_window_size:
+		return
+	_cached_window_size = win
+	_sync_content_scale(win)
+	_resize_dirty = true
+	_resize_last_ms = Time.get_ticks_msec()
+
+
+## 每帧兜底轮询：部分平台/窗口管理器不会向根 Viewport 派发 size_changed
+func _process(_delta: float) -> void:
+	var win := DisplayServer.window_get_size()
+	if win.x > 0 and win.y > 0 and win != _cached_window_size:
+		_on_window_size_changed()
+	if _resize_dirty and Time.get_ticks_msec() - _resize_last_ms >= RESIZE_DEBOUNCE_MS:
+		_resize_dirty = false
+		_apply_safe_area()
 
 
 ## 竖屏逻辑宽度固定 450，高度按窗口宽高比推导：物理显示比原 540 基准放大约 20%；
 ## 横屏 / PC 保留实际窗口宽高比（封顶 1600×等比），确保 1440×900 能进入 WIDE 三列断点。
 ## 值判等防递归。
-func _sync_content_scale() -> void:
-	var win := DisplayServer.window_get_size()
+func _sync_content_scale(win_override: Vector2i = Vector2i.ZERO) -> void:
+	var win := win_override if win_override != Vector2i.ZERO \
+		else DisplayServer.window_get_size()
 	if win.x <= 0 or win.y <= 0:
 		return
-	if get_window() == null:
+	var window := get_window()
+	if window == null:
 		return
-	var target := Vector2i(1024, 720)
+	# 强制等比：canvas_items + expand，运行期绝不允许被改成 ignore / keep_* 造成横向压扁
+	if window.content_scale_mode != Window.CONTENT_SCALE_MODE_CANVAS_ITEMS:
+		window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	if window.content_scale_aspect != Window.CONTENT_SCALE_ASPECT_EXPAND:
+		window.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+	var target := Vector2i(win.x, win.y)
 	if win.x < win.y:
+		# 竖屏：逻辑宽固定 450，高度按窗口宽高比推导（保底 800）
 		var aspect := float(win.y) / float(maxi(1, win.x))
 		target = Vector2i(PORTRAIT_WIDTH,
 			maxi(PORTRAIT_MIN_HEIGHT, int(round(float(PORTRAIT_WIDTH) * aspect))))
-	elif win.x > 1024:
+	else:
+		# 横屏 / 桌面：逻辑宽 = 真实窗口宽（超宽仅 1600 封顶），
+		# 断点才与玩家拖拽的窗口宽度一致，不会再把 700 宽窗口强行按 1024 逻辑宽排成中屏。
 		var cap_scale := minf(1.0, float(MAX_ULTRA_WIDE) / float(win.x))
 		target = Vector2i(
-			clampi(int(round(float(win.x) * cap_scale)), 1024, int(MAX_ULTRA_WIDE)),
-			maxi(720, int(round(float(win.y) * cap_scale))))
-	if get_window().content_scale_size != target:
-		get_window().content_scale_size = target
+			clampi(int(round(float(win.x) * cap_scale)), PORTRAIT_WIDTH, int(MAX_ULTRA_WIDE)),
+			maxi(320, int(round(float(win.y) * cap_scale))))
+	if window.content_scale_size != target:
+		window.content_scale_size = target
 
 
 ## 存档里的「锁定竖屏」仅对移动端生效
@@ -862,10 +991,11 @@ func _build_layout() -> void:
 	side_style.set_border_width_all(0)
 	side_style.border_width_right = 1
 	side_style.bg_color = Color(0, 0, 0, 0)
-	side_style.content_margin_top = 8
-	side_style.content_margin_bottom = 8
+	side_style.content_margin_top = 6
+	side_style.content_margin_bottom = 6
 	_sidebar_slot.add_theme_stylebox_override("panel", side_style)
 	_sidebar_slot.visible = false
+	_sidebar_slot.visibility_changed.connect(_on_sidebar_slot_visibility)
 	_body_row.add_child(_sidebar_slot)
 	_sidebar_scroll = ThemeBuilder.scroll_container()
 	_configure_nav_scroll(_sidebar_scroll)
@@ -900,11 +1030,12 @@ func _build_topbar() -> PanelContainer:
 	# 顶栏内部极端长文本不向外顶宽：仍有面板级自适应，这里只做硬裁兜底
 	bar.clip_contents = true
 	bar.custom_minimum_size = Vector2(0, TOPBAR_HEIGHT + _safe_top)
-	_top_style = ThemeBuilder.panel_box(ThemeBuilder.COLOR_CHROME,
-		ThemeBuilder.COLOR_CHROME_LINE, 0, 0, 0)
+	# 半透明宣纸顶栏：透出下方山水底图，底缘只留 1px 极淡分隔线
+	_top_style = ThemeBuilder.panel_box(Color("#F4EFE6", 0.74),
+		Color(ThemeBuilder.COLOR_CHROME_LINE, 0.40), 0, 0, 0)
 	_top_style.set_border_width_all(0)
 	_top_style.border_width_bottom = 1
-	_top_style.border_color = ThemeBuilder.COLOR_CHROME_LINE
+	_top_style.border_color = Color(ThemeBuilder.COLOR_CHROME_LINE, 0.40)
 	_top_style.content_margin_left = 10
 	_top_style.content_margin_right = 10
 	_top_style.content_margin_top = 6 + _safe_top
@@ -948,7 +1079,8 @@ func _build_topbar() -> PanelContainer:
 	_realm_panel = PanelContainer.new()
 	_realm_panel.custom_minimum_size = Vector2(150, 0)
 	_realm_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_realm_style = ThemeBuilder.panel_box(ThemeBuilder.COLOR_CARD,
+	# 顶栏三胶囊保持高不透明度，避免透出底图后数字对比度下降
+	_realm_style = ThemeBuilder.panel_box(Color(ThemeBuilder.COLOR_CARD, 0.94),
 		ThemeBuilder.COLOR_BORDER, 9, 1, 8)
 	_realm_style.content_margin_top = 3
 	_realm_style.content_margin_bottom = 3
@@ -997,7 +1129,7 @@ func _build_topbar() -> PanelContainer:
 
 	# 灵石：图标 + 紧凑数值
 	_stone_capsule = PanelContainer.new()
-	var stone_style := ThemeBuilder.panel_box(ThemeBuilder.COLOR_SUBTLE,
+	var stone_style := ThemeBuilder.panel_box(Color(ThemeBuilder.COLOR_SUBTLE, 0.94),
 		ThemeBuilder.COLOR_CHROME_LINE, 10, 1, 8)
 	stone_style.content_margin_top = 3
 	stone_style.content_margin_bottom = 3
@@ -1205,6 +1337,17 @@ func _page_icon_texture(page_key: String) -> Texture2D:
 
 
 func _nav_style(active: bool) -> StyleBoxFlat:
+	# 只读样式对象常驻复用：底栏五枚按钮共享同一份，切页零分配
+	if active:
+		if _nav_style_active == null:
+			_nav_style_active = _make_nav_style(true)
+		return _nav_style_active
+	if _nav_style_idle == null:
+		_nav_style_idle = _make_nav_style(false)
+	return _nav_style_idle
+
+
+func _make_nav_style(active: bool) -> StyleBoxFlat:
 	var box := ThemeBuilder.panel_box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, 0)
 	box.set_border_width_all(0)
 	box.content_margin_top = 4
@@ -1435,11 +1578,12 @@ func _build_drawer() -> void:
 
 
 func _build_nav_content() -> VBoxContainer:
-	var list := ThemeBuilder.vbox(4)
+	# 紧凑分组：行距 2px + 组前 2px 留白，字号与行高不变，宽屏一屏多露出 2~3 个入口
+	var list := ThemeBuilder.vbox(2)
 	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for group in DRAWER_GROUPS:
 		var group_dict: Dictionary = group
-		list.add_child(ThemeBuilder.spacer(6))
+		list.add_child(ThemeBuilder.spacer(2))
 		var group_label := ThemeBuilder.label(String(group_dict["title"]),
 			ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM)
 		ThemeBuilder.apply_brush_kai(group_label)
@@ -1466,6 +1610,11 @@ func _build_nav_content() -> VBoxContainer:
 func _refresh_drawer_legend() -> void:
 	if _drawer_legend == null:
 		return
+	# 图例只在槽位数 / 字号档变化时重建：顶栏 10Hz 刷新绝不能反复销毁图例节点
+	var sig := "%d|%.2f" % [GameState.get_max_action_slots(), ThemeBuilder.font_scale]
+	if sig == _legend_sig:
+		return
+	_legend_sig = sig
 	for child in _drawer_legend.get_children():
 		_drawer_legend.remove_child(child)
 		child.queue_free()
@@ -1485,7 +1634,8 @@ func _refresh_drawer_legend() -> void:
 
 func _make_drawer_item(target_key: String, label_text: String, right_text: String) -> Button:
 	var button := ThemeBuilder.button("")
-	button.custom_minimum_size = Vector2(0, 46)
+	# 44px 仍满足触控红线，较原 46px 每行省 2px；分组间距另收至 2px
+	button.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	# 点击触发 + 拖拽冒泡：PASS 让按钮仍收点击，同时把滑动手势继续传给外层 ScrollContainer
 	button.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -1616,7 +1766,42 @@ func _drawer_label(key: String) -> String:
 			return skill_name if skill_name != "" and skill_name != key else "未名卷页"
 
 
+## 侧边栏副文本用境界简称：取「·」前段，如「真仙圆满 · 飞升仙界」→「真仙圆满」
+func _drawer_realm_subtitle() -> String:
+	var realm := GameState.get_realm()
+	if realm == null:
+		return ""
+	var full_name := String(realm.display_name).strip_edges()
+	if full_name == "":
+		return ""
+	var parts := full_name.split(" · ", false)
+	return parts[0].strip_edges() if not parts.is_empty() else full_name
+
+
+## 抽屉行样式常驻复用：高频刷新只换引用，不再每行每次分配 StyleBoxFlat
+var _drawer_style_idle: StyleBoxFlat
+var _drawer_style_active: StyleBoxFlat
+## 抽屉/侧栏刷新合并：同帧多条信号只刷一次，不可见时只记脏
+var _drawer_refresh_queued: bool = false
+var _drawer_dirty: bool = false
+var _drawer_active_key: String = ""
+## 顶栏胶囊 / 三才图例签名：状态未变时 10Hz 刷新零样式分配、零节点重建
+var _capsule_sig: String = ""
+var _legend_sig: String = ""
+var _topbar_bar_state: Color = Color(0, 0, 0, 0)
+
+
 func _drawer_item_style(active: bool) -> StyleBoxFlat:
+	if active:
+		if _drawer_style_active == null:
+			_drawer_style_active = _make_drawer_item_style(true)
+		return _drawer_style_active
+	if _drawer_style_idle == null:
+		_drawer_style_idle = _make_drawer_item_style(false)
+	return _drawer_style_idle
+
+
+func _make_drawer_item_style(active: bool) -> StyleBoxFlat:
 	var box := ThemeBuilder.panel_box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 8, 0, 8)
 	box.set_border_width_all(0)
 	box.content_margin_top = 4
@@ -1626,6 +1811,34 @@ func _drawer_item_style(active: bool) -> StyleBoxFlat:
 		box.border_color = ThemeBuilder.COLOR_JADE
 		box.border_width_left = 3
 	return box
+
+
+## 导航行当前是否真的可见（COMPACT 抽屉关闭时不可见）
+func _nav_content_visible() -> bool:
+	for key in _drawer_entries.keys():
+		var button: Button = (_drawer_entries[key] as Dictionary).get("button", null)
+		if button != null:
+			return button.is_visible_in_tree()
+	return false
+
+
+## 高频信号入口：合并到下一帧最多刷一次；不可见只置脏，展开/切到侧栏时补刷
+func _request_drawer_refresh() -> void:
+	_drawer_dirty = true
+	if _drawer_refresh_queued:
+		return
+	_drawer_refresh_queued = true
+	call_deferred("_do_drawer_refresh")
+
+
+func _do_drawer_refresh() -> void:
+	_drawer_refresh_queued = false
+	if not _drawer_dirty:
+		return
+	_drawer_dirty = false
+	if not _nav_content_visible():
+		return
+	_refresh_drawer()
 
 
 func _open_drawer() -> void:
@@ -1712,7 +1925,21 @@ func _on_drawer_item_pressed(target_key: String) -> void:
 func _refresh_drawer() -> void:
 	if _drawer_entries.is_empty():
 		return
+	_drawer_dirty = false
 	var cap := GameState.get_skill_level_cap()
+
+	var character_deco: Dictionary = _drawer_entries.get("character", {})
+	if not character_deco.is_empty():
+		var character_right: Label = character_deco.get("right", null)
+		if character_right != null:
+			if not character_right.has_meta("drawer_caption_sized"):
+				character_right.set_meta("drawer_caption_sized", true)
+				ThemeBuilder.apply_font_size(character_right, ThemeBuilder.FONT_CAPTION)
+			character_right.text = _drawer_realm_subtitle()
+			var realm := GameState.get_realm()
+			var tier := 0 if realm == null else realm.tier
+			character_right.add_theme_color_override("font_color",
+				ThemeBuilder.realm_tier_color(tier))
 
 	for skill_id in SKILL_LEVEL_KEYS:
 		var deco: Dictionary = _drawer_entries.get(skill_id, {})
@@ -1723,11 +1950,14 @@ func _refresh_drawer() -> void:
 		if left_label != null:
 			left_label.text = _drawer_label(skill_id)
 		var level_label: Label = deco["right"]
-		level_label.text = "%d/%d 重" % [level, cap]
+		# 侧栏只显示当前重数（「150重」）；上限进 tooltip，
+		# 把横向空间让给百艺名称，1.20 大字档 + 三枚槽位圆点也不会挤成省略号
+		level_label.text = "%d重" % level
+		level_label.tooltip_text = "熟练 %d / %d 重" % [level, cap]
 		# 满级技能用玉青色高亮，与未满级项拉开层次
 		level_label.add_theme_color_override("font_color",
 			ThemeBuilder.COLOR_JADE if level >= cap else ThemeBuilder.COLOR_TEXT_DIM)
-		# 运行圆点：每个占用槽位一枚（主修玉青/分神鎏金/化身紫霞绛），多槽并排
+		# 运行圆点：每个占用槽位一枚三才专属色（主修翠玉绿 / 分神靛青蓝 / 化身紫霄紫），多槽并排
 		var dot: Container = deco["dot"]
 		var dot_colors: Array = []
 		if skill_id == "combat":
@@ -1740,6 +1970,7 @@ func _refresh_drawer() -> void:
 					continue
 				var slot_act := DataRegistry.get_action(slot_action)
 				if slot_act != null and slot_act.skill_id == skill_id:
+					# 左侧边栏：占用哪个槽位就亮对应槽位色，点与条一一对应
 					dot_colors.append(ThemeBuilder.slot_dot_color(slot))
 		ThemeBuilder.set_row_dots(dot, dot_colors)
 
@@ -1876,20 +2107,22 @@ func _refresh_drawer() -> void:
 			feature_right.add_theme_color_override("font_color", ThemeBuilder.COLOR_JADE)
 			ThemeBuilder.set_row_dots(feature_dot, [])
 
-	# 当前页面高亮（玉青左竖条 + 描边）
-	for key in _drawer_entries.keys():
-		var deco: Dictionary = _drawer_entries[key]
-		var button: Button = deco.get("button", null)
-		if button == null:
-			continue
-		var active := String(key) == _current_key
-		button.add_theme_stylebox_override("normal", _drawer_item_style(active))
-		button.add_theme_stylebox_override("hover", _drawer_item_style(active))
-		# 主标题与浅玉青底 / 左侧黛玉青竖条同色系；未选中回深墨正文色
-		var title_label: Label = deco.get("left", null)
-		if title_label != null:
-			title_label.add_theme_color_override("font_color",
-				ThemeBuilder.COLOR_JADE_DARK if active else ThemeBuilder.COLOR_TEXT_PRIMARY)
+	# 当前页面高亮（玉青左竖条 + 描边）：只在本页切换时重设，切页之外的刷新零样式写入
+	if _drawer_active_key != _current_key:
+		_drawer_active_key = _current_key
+		for key in _drawer_entries.keys():
+			var deco: Dictionary = _drawer_entries[key]
+			var button: Button = deco.get("button", null)
+			if button == null:
+				continue
+			var active := String(key) == _current_key
+			button.add_theme_stylebox_override("normal", _drawer_item_style(active))
+			button.add_theme_stylebox_override("hover", _drawer_item_style(active))
+			# 主标题与浅玉青底 / 左侧黛玉青竖条同色系；未选中回深墨正文色
+			var title_label: Label = deco.get("left", null)
+			if title_label != null:
+				title_label.add_theme_color_override("font_color",
+					ThemeBuilder.COLOR_JADE_DARK if active else ThemeBuilder.COLOR_TEXT_PRIMARY)
 	_refresh_attention()
 
 
@@ -2268,6 +2501,33 @@ func _create_panel(key: String) -> Control:
 			return null
 
 
+## 空闲帧分批预热常用图标：每帧至多 2 枚，单帧预算约 1ms，
+## 避免首次打开「万象玉简 / 储物袋」等分页时同帧集中光栅化几十张 SVG。
+func _preheat_common_icons() -> void:
+	if _preheat_running or not is_inside_tree():
+		return
+	_preheat_running = true
+	_preheat_queue.clear()
+	for skill_id in SKILL_LEVEL_KEYS:
+		var sid := skill_id
+		_preheat_queue.append(func() -> void: IconLibrary.get_skill_icon(sid))
+	for nav_key in ["craft", "farm", "realm", "market", "bag"]:
+		var nk := String(nav_key)
+		_preheat_queue.append(func() -> void: IconLibrary.get_nav_icon(nk))
+	for page_key in PAGE_ICON_KEYS.keys():
+		var pk := String(page_key)
+		_preheat_queue.append(func() -> void: _page_icon_texture(pk))
+	while not _preheat_queue.is_empty() and is_inside_tree():
+		var batch := 0
+		while batch < 2 and not _preheat_queue.is_empty():
+			var job: Callable = _preheat_queue.pop_front()
+			if job.is_valid():
+				job.call()
+			batch += 1
+		await get_tree().process_frame
+	_preheat_running = false
+
+
 func _show_panel(key: String) -> void:
 	if key == _current_key:
 		_refresh_nav()
@@ -2282,11 +2542,21 @@ func _show_panel(key: String) -> void:
 		_panels[key] = panel
 	for panel_key in _panels.keys():
 		var node: Control = _panels[panel_key]
-		node.visible = String(panel_key) == key
-		if node.visible:
+		var show := String(panel_key) == key
+		if node.visible != show:
+			node.visible = show
+		if show:
+			# 切回时恢复轮询，再做轻量增量刷新（面板自身在 visibility_changed 中处理）
+			if node.process_mode == Node.PROCESS_MODE_DISABLED:
+				node.process_mode = Node.PROCESS_MODE_INHERIT
 			# 页面切入微动效（淡入 + 12px 上浮；内部自动重置缓存面板基准，狂点不漂移）
 			ThemeBuilder.animate_page_enter(node)
+		else:
+			# 切走即停：不可见面板内 ActionCard 进度 / 呼吸动效等每帧轮询全部暂停
+			node.process_mode = Node.PROCESS_MODE_DISABLED
 	_current_key = key
+	# 前台页面写入全局总线：音频按「当前所看模块」决定谁可以发声
+	EventBus.current_page = key
 	# 天道榜 / 仙盟传书仅打开面板时请求一次；面板内部负责手动刷新
 	if (key == "leaderboard" or key == "mail") and _panels.has(key) \
 			and (_panels[key] as Node).has_method("on_panel_opened"):
@@ -2347,7 +2617,29 @@ func _on_navigate_to_source(source: Dictionary) -> void:
 				inventory_panel.select_tab(String(source.get("tab", "equipment")))
 
 
+## 导航内容签名：页面、角标、三槽运转、动态图标任一变化才真正刷新
+func _nav_signature() -> String:
+	var parts: PackedStringArray = [
+		_current_key,
+		"1" if FarmManager.has_mature() else "0",
+		"1" if _can_tribulate() else "0",
+		str(IconLibrary.get_cache_size()),
+		SpiritRootSystem.element_icon(),
+		str(NatalArtifactSystem.get_state().get("embryo_id", "")),
+	]
+	for slot in range(GameState.SLOT_COUNT):
+		parts.append(GameState.get_active_action(slot))
+	for entry in BOTTOM_NAV:
+		var nav_item: Dictionary = entry
+		parts.append("1" if _is_bottom_group_active(String(nav_item["key"])) else "0")
+	return "|".join(parts)
+
+
 func _refresh_nav() -> void:
+	var sig := _nav_signature()
+	if sig == _nav_sig:
+		return
+	_nav_sig = sig
 	var active_key := ""
 	for entry in BOTTOM_NAV:
 		var item: Dictionary = entry
@@ -2396,6 +2688,7 @@ func _refresh_nav() -> void:
 				continue
 			var act := DataRegistry.get_action(aid)
 			if act != null and act.skill_id == skill_id:
+				# 三才专属色：哪个槽位占用本门百艺，就亮起该槽位颜色的圆点
 				dot_colors.append(ThemeBuilder.slot_dot_color(slot))
 		ThemeBuilder.set_row_dots(skill_dot, dot_colors)
 	if _farm_nav_dot != null:
@@ -2547,13 +2840,14 @@ func _do_refresh_topbar() -> void:
 		# 向下取整：99.6% 若四舍五入成 100%，会让玩家误以为已满却没晋升
 		_cultivation_pct.text = "%d%%" % int(floor(ratio * 100.0))
 		_cultivation_pct.add_theme_color_override("font_color", ThemeBuilder.COLOR_TEXT)
-	# 进度条：暖石轨道 + 玉青填充；可突破时切换朱砂/泥金
+	# 进度条：暖石轨道 + 玉青填充；可突破时切换朱砂/泥金（样式缓存复用，10Hz 零分配）
 	var fill_color := ThemeBuilder.COLOR_CINNABAR if breakthrough_ready else ThemeBuilder.COLOR_JADE
-	_cultivation_bar.add_theme_stylebox_override("fill",
-		ThemeBuilder.panel_box(fill_color, fill_color, 2, 0, 0))
-	_cultivation_bar.add_theme_stylebox_override("background",
-		ThemeBuilder.panel_box(Color("#F6E3DE") if breakthrough_ready else Color("#E4DDD0"),
-			Color(0, 0, 0, 0), 2, 0, 0))
+	ThemeBuilder.set_bar_fill(_cultivation_bar, fill_color, 2)
+	if fill_color != _topbar_bar_state:
+		_topbar_bar_state = fill_color
+		_cultivation_bar.add_theme_stylebox_override("background",
+			ThemeBuilder.panel_box(Color("#F6E3DE") if breakthrough_ready else Color("#E4DDD0"),
+				Color(0, 0, 0, 0), 2, 0, 0))
 
 	_set_stone_value(GameState.get_item_count(DataRegistry.SPIRIT_STONE), false)
 	_refresh_capsule()
@@ -2582,44 +2876,13 @@ func _refresh_realm_seal() -> void:
 		return
 	var realm := GameState.get_realm()
 	var tier := 0 if realm == null else realm.tier
-	var prefix := "炼气"
-	var style_type := "cinnabar"
-	match tier:
-		1:
-			prefix = "筑基"
-			style_type = "jade"
-		2:
-			prefix = "金丹"
-			style_type = "gold"
-		3:
-			prefix = "元婴"
-			style_type = "gold"
-		4:
-			prefix = "化神"
-			style_type = "gold"
-		5:
-			prefix = "炼虚"
-			style_type = "gold"
-		6:
-			prefix = "合体"
-			style_type = "gold"
-		7:
-			prefix = "大乘"
-			style_type = "gold"
-		8:
-			prefix = "真仙"
-			style_type = "gold"
-	_realm_seal_label.text = prefix
-	var bg := ThemeBuilder.COLOR_CINNABAR
-	var border := ThemeBuilder.COLOR_CINNABAR
-	if style_type == "gold":
-		bg = ThemeBuilder.COLOR_AMBER
-		border = ThemeBuilder.COLOR_AMBER
-	elif style_type == "jade":
-		bg = ThemeBuilder.COLOR_JADE
-		border = ThemeBuilder.COLOR_JADE
+	var prefixes: Array[String] = ["炼气", "筑基", "金丹", "元婴", "化神",
+		"炼虚", "合体", "大乘", "真仙"]
+	_realm_seal_label.text = prefixes[clampi(tier, 0, prefixes.size() - 1)]
+	# 与侧栏 / CharacterPanel 共用九重大境界语义配色
+	var accent := ThemeBuilder.realm_tier_color(tier)
 	_realm_seal.add_theme_stylebox_override("panel",
-		ThemeBuilder.panel_box(bg, border, 3, 1, 4))
+		ThemeBuilder.panel_box(accent, accent, 3, 1, 4))
 	# 渡劫提示与境界印共存：玩家始终能看到当前大境界
 	_realm_seal.visible = true
 
@@ -2630,7 +2893,8 @@ func _update_realm_pulse() -> void:
 		return
 	var ready := GameState.is_cultivation_locked()
 	if ready:
-		_realm_style.bg_color = ThemeBuilder.COLOR_GOLD_SOFT
+		# 保持 0.94 不透明度：脉冲高亮也不能变成不透明块，顶栏需透出底图
+		_realm_style.bg_color = Color(ThemeBuilder.COLOR_GOLD_SOFT, 0.94)
 		_realm_style.border_color = ThemeBuilder.COLOR_AMBER
 		_realm_style.set_border_width_all(1)
 		if _pulse_tween == null or not _pulse_tween.is_valid():
@@ -2638,7 +2902,7 @@ func _update_realm_pulse() -> void:
 			_pulse_tween.tween_property(_realm_panel, "modulate:a", 0.6, 0.8)
 			_pulse_tween.tween_property(_realm_panel, "modulate:a", 1.0, 0.8)
 	else:
-		_realm_style.bg_color = ThemeBuilder.COLOR_CARD
+		_realm_style.bg_color = Color(ThemeBuilder.COLOR_CARD, 0.94)
 		_realm_style.border_color = ThemeBuilder.COLOR_BORDER
 		_realm_style.set_border_width_all(1)
 		_realm_panel.modulate.a = 1.0
@@ -2689,6 +2953,14 @@ func _format_stone_count(value: int) -> String:
 
 
 func _refresh_capsule() -> void:
+	var capsule_sig := "%s|%s|%s|%d|%s|%d|%.2f" % [
+		str(_can_tribulate()), str(CombatEngine.is_active()),
+		str(CombatEngine.tower_floor > 0), GameState.get_running_slots().size(),
+		GameState.get_display_action_id(0), int(EventBus.current_layout),
+		ThemeBuilder.font_scale]
+	if capsule_sig == _capsule_sig:
+		return
+	_capsule_sig = capsule_sig
 	_active_capsule.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var target := ""
 	# 空闲双态：可渡天劫（鎏金高亮）/ 静修（浅褐描边，轻触展开三才启程灵岛）
@@ -2755,21 +3027,22 @@ func _refresh_capsule() -> void:
 	_capsule_icon.modulate = Color(1, 1, 1, icon_alpha)
 	_active_capsule.add_theme_color_override("font_color", color)
 	_active_capsule.add_theme_color_override("font_hover_color", color)
-	var normal_box := ThemeBuilder.panel_box(bg, border, 10, 1, 0)
+	# 胶囊本体保持 0.94 不透明度（空闲态补一层浅宣纸底），文字与数字不被底图干扰
+	var capsule_bg := Color(bg.r, bg.g, bg.b, 0.94) if bg.a > 0.0 \
+		else Color(ThemeBuilder.COLOR_CARD, 0.94)
+	var normal_box := ThemeBuilder.panel_box(capsule_bg, border, 10, 1, 0)
 	normal_box.content_margin_left = 10
 	normal_box.content_margin_right = 10
 	normal_box.content_margin_top = 4
 	normal_box.content_margin_bottom = 4
 	_active_capsule.add_theme_stylebox_override("normal", normal_box)
-	var hover_box := ThemeBuilder.panel_box(
-		bg.darkened(0.04) if bg.a > 0.0 else bg, border, 10, 1, 0)
+	var hover_box := ThemeBuilder.panel_box(capsule_bg.darkened(0.04), border, 10, 1, 0)
 	hover_box.content_margin_left = 10
 	hover_box.content_margin_right = 10
 	hover_box.content_margin_top = 4
 	hover_box.content_margin_bottom = 4
 	_active_capsule.add_theme_stylebox_override("hover", hover_box)
-	var pressed_box := ThemeBuilder.panel_box(
-		bg.darkened(0.08) if bg.a > 0.0 else bg, border, 10, 1, 0)
+	var pressed_box := ThemeBuilder.panel_box(capsule_bg.darkened(0.08), border, 10, 1, 0)
 	pressed_box.content_margin_left = 10
 	pressed_box.content_margin_right = 10
 	pressed_box.content_margin_top = 4
@@ -2794,14 +3067,17 @@ func _sync_topbar_chip_heights() -> void:
 
 
 func _refresh_stones() -> void:
+	# 灵石变化只动这一个 Label；胶囊 / 抽屉与灵石无关，走各自的事件入口
 	_set_stone_value(GameState.get_item_count(DataRegistry.SPIRIT_STONE), true)
-	_refresh_capsule()
 	_refresh_nav()
-	_refresh_drawer()
+	_request_drawer_refresh()
 
 
 func _set_stone_value(target: int, animate: bool) -> void:
 	if _stone_label == null:
+		return
+	var tween_running := _stone_tween != null and _stone_tween.is_valid()
+	if target == _stone_value and not tween_running:
 		return
 	if _stone_tween != null and _stone_tween.is_valid():
 		_stone_tween.kill()
@@ -2827,7 +3103,7 @@ func _set_stone_value(target: int, animate: bool) -> void:
 
 func _on_action_state_changed(_slot: int, _action_id: String) -> void:
 	_refresh_capsule()
-	_refresh_drawer()
+	_request_drawer_refresh()
 	_refresh_nav()
 
 

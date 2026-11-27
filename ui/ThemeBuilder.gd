@@ -6,6 +6,10 @@ const HP_GHOST_COLOR: Color = Color("#E69F8A")
 ## 程序化「宣纸墨韵」浅色古籍主题与 StyleBoxFlat 工厂（移动端竖屏优先）。
 ## 以面代线：宣纸底 → 象牙白卡片 → 暖石凹陷，用明度差分层，不再满屏细边框。
 
+## 客户端展示版本唯一来源：位于 .pck 可覆盖脚本中，热更即生效，无需重装 APK。
+## 发版时只改这里；project.godot 仅用于保持未来新底包一致。
+const APP_DISPLAY_VERSION: String = "1.0.1"
+
 # ---------------------------------------------------------------- 宣纸色板
 ## 底层宣纸 / 顶栏底栏 / 前景卡片 / 凹陷容器
 const COLOR_BG: Color = Color("#F4EFE6")
@@ -20,6 +24,15 @@ const COLOR_SUBTLE: Color = Color("#E8E0D1")
 ## 进度条 / 血条槽色：比卡片底色深一档，保证细条也能读出"轨道 + 填充"
 const COLOR_BAR_TRACK: Color = Color("#D5C9B2")
 const COLOR_BAR_TRACK_EDGE: Color = Color("#C4B79E")
+## 全站进度条语义标准（唯一口径）：
+## 运转/读秒类 = 翠玉绿（COLOR_JADE）；积累/成长类 = 暖金棕（#9A6822）。
+## 统一 6px 条高 + 3px 胶囊圆角，不绘制突出端点圆点。
+const COLOR_BAR_RUN: Color = COLOR_JADE
+const COLOR_BAR_GROW: Color = Color("#9A6822")
+const BAR_HEIGHT_RUN: float = 6.0
+const BAR_HEIGHT_GROW: float = 6.0
+const BAR_CAPSULE_RADIUS: int = 3
+
 ## 进度条轨道/填充圆角：progress_bar 与 PoolMilestoneBar 共用，保证粗细与轮廓一致
 const PROGRESS_BG_RADIUS: int = 5
 const PROGRESS_FILL_RADIUS: int = 4
@@ -61,6 +74,13 @@ const COLOR_CINNABAR_EDGE: Color = Color("#E4B8B1")
 const COLOR_AMBER: Color = COLOR_TEXT_GOLD
 const COLOR_GOLD_SOFT: Color = Color("#F6EEDC")
 const COLOR_EMERALD: Color = COLOR_TEXT_JADE
+
+## 三才槽位专属色（全站唯一口径，点 / 条 / 徽章 / 描边一一对应）：
+## 0 主修 翠玉绿 · 1 分神 靛青蓝 · 2 化身 紫霄紫。
+## 火候 / 悟道池 / 灵田生长仍走暖金棕 COLOR_BAR_GROW，与三才运转色明确区分。
+const COLOR_SLOT_MAIN: Color = Color("#215A4F")
+const COLOR_SLOT_SPIRIT: Color = Color("#2E5C7E")
+const COLOR_SLOT_AVATAR: Color = Color("#6E4B7E")
 
 ## 卡片柔和暖阴影 / 图标底框
 const COLOR_SHADOW: Color = Color(0.18, 0.14, 0.10, 0.06)
@@ -248,7 +268,15 @@ static func flat_box(bg: Color, radius: int = 4, margin_h: int = 8, margin_v: in
 	return box
 
 
+static var _circle_style_cache: Dictionary = {}
+
+
 static func circle_box(color: Color, size: float = 8.0) -> StyleBoxFlat:
+	# 圆点样式参数相同即复用：切页时导航/抽屉多点刷新不再反复分配 StyleBoxFlat
+	var cache_key := "%s|%.1f" % [color.to_html(true), size]
+	var cached: StyleBoxFlat = _circle_style_cache.get(cache_key, null)
+	if cached != null:
+		return cached
 	var box := StyleBoxFlat.new()
 	box.bg_color = color
 	box.set_corner_radius_all(int(size * 0.5))
@@ -257,6 +285,7 @@ static func circle_box(color: Color, size: float = 8.0) -> StyleBoxFlat:
 	box.content_margin_top = 0
 	box.content_margin_bottom = 0
 	box.anti_aliasing = true
+	_circle_style_cache[cache_key] = box
 	return box
 
 
@@ -541,6 +570,126 @@ static func wrap_label(text_value: String, font_size: int = FONT_SMALL,
 	return node
 
 
+## 防断词折行：短语内部空格换成 NBSP + WORD JOINER，只在 · / ，/ + / → 等分隔符后
+## 保留真正的 ASCII 可折行空格（Godot 折行只认普通空格，ZWSP 不会断行）。
+## BBCode 标签不含空格，可安全复用同一函数。
+static func protect_phrases(text_value: String) -> String:
+	# BBCode 标签原样透传，只处理可见文本，避免把 WJ 插进 [color=...] 里；
+	# 标签两侧补 WORD JOINER，防止「鸿蒙紫金 [color]×4…」在标签边界被拆开
+	var out := ""
+	var visible := ""
+	var pending_join := false
+	## 分隔符后的普通空格是唯一断点：其后不得补 WJ，否则整段重新焊死
+	var break_pending := false
+	var i := 0
+	var length := text_value.length()
+	while i < length:
+		var ch := text_value[i]
+		if ch == "[":
+			var close := text_value.find("]", i)
+			if close > i:
+				out += _protect_visible_phrases(visible)
+				visible = ""
+				break_pending = out.ends_with(" ")
+				# 分隔符后的普通空格必须保持为断点，不能再补 WJ 焊死
+				if out != "" and not break_pending \
+						and not out.ends_with("\u2060"):
+					out += "\u2060"
+				out += text_value.substr(i, close - i + 1)
+				pending_join = true
+				i = close + 1
+				continue
+		if pending_join:
+			# 断点后的首个可见字前不插 WJ，Godot 才会在此处折行
+			if not break_pending and not out.ends_with(" "):
+				visible += "\u2060"
+			pending_join = false
+			break_pending = false
+		visible += ch
+		i += 1
+	out += _protect_visible_phrases(visible)
+	return out
+
+
+static func _protect_visible_phrases(text_value: String) -> String:
+	var s := text_value
+	# 先标记真正可断行的分隔符，避免随后统一替换空格时把词组边界也焊死
+	s = s.replace(" + ", "\u0007")
+	s = s.replace(" · ", "\u0001")
+	s = s.replace(" / ", "\u0006")
+	s = s.replace("→", "\u0008")
+	s = s.replace("，", "\u0002")
+	s = s.replace("；", "\u0003")
+	s = s.replace("。", "\u0004")
+	s = s.replace("、", "\u0005")
+	# 其余空格全部视为词组内部连接，禁止换行
+	s = s.replace(" ", "\u00A0")
+	# 分隔符后恢复普通空格：Godot 的 AUTOWRAP_WORD 只在这里断行
+	s = s.replace("\u0007", "\u00A0+ ")
+	s = s.replace("\u0001", "\u00A0· ")
+	s = s.replace("\u0006", "\u00A0/ ")
+	s = s.replace("\u0008", "\u00A0→ ")
+	s = s.replace("\u0002", "， ")
+	s = s.replace("\u0003", "； ")
+	s = s.replace("\u0004", "。 ")
+	s = s.replace("\u0005", "、 ")
+	# 词组内逐字插 WORD JOINER（U+2060），连 CJK 单字之间也不许断
+	# allow_empty=true 保留分隔符后的可折行空格（否则行尾断点会被吞掉）
+	var tokens: PackedStringArray = s.split(" ", true)
+	var out := ""
+	for idx in range(tokens.size()):
+		if idx > 0:
+			out += " "
+		var token: String = tokens[idx]
+		for ci in range(token.length()):
+			if ci > 0:
+				out += "\u2060"
+			out += token[ci]
+	return out
+
+
+## 只有「属性 / 掉落 / 配方」这类短结构化行才启用防断词，避免长段攻略失去换行机会
+static func is_structured_line(text_value: String) -> bool:
+	if text_value.contains(" · ") or text_value.contains("×") \
+			or text_value.contains("→") or text_value.contains("(存"):
+		return true
+	if text_value.contains("%") and text_value.contains(" "):
+		return true
+	return false
+
+
+## 宽屏底部框体延展：若卡片底边离面板底边仍有大块空白，按可用高度补最小高度。
+## base_h 为原始最小高，card 当前尺寸参与测量；窗口变窄时 gap 为负会自动收回 base_h。
+static func fit_bottom_card(panel: Control, card: Control, base_h: float,
+		min_gap: float = 10.0) -> void:
+	if panel == null or card == null or not panel.is_visible_in_tree() \
+			or not card.is_visible_in_tree():
+		return
+	var host := panel.get_global_rect()
+	var rect := card.get_global_rect()
+	var gap := host.end.y - rect.end.y
+	var target := maxf(base_h, base_h + gap - min_gap)
+	if absf(target - card.custom_minimum_size.y) > 0.6:
+		card.custom_minimum_size.y = target
+
+
+## 结构化小字专用：NBSP 防断词 + AUTOWRAP_WORD
+static func wrap_label_phrases(text_value: String, font_size: int = FONT_SMALL,
+		color: Color = COLOR_TEXT_SECONDARY) -> Label:
+	var node := label(protect_phrases(text_value), font_size, color)
+	node.autowrap_mode = TextServer.AUTOWRAP_WORD
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return node
+
+
+## RichTextLabel / Label 统一设为按词折行（NBSP 内部不拆）
+static func enable_phrase_wrap(node: Control) -> void:
+	if node is Label:
+		(node as Label).autowrap_mode = TextServer.AUTOWRAP_WORD
+	elif node is RichTextLabel:
+		(node as RichTextLabel).autowrap_mode = TextServer.AUTOWRAP_WORD
+
+
 static func button(text_value: String, accent: bool = false) -> Button:
 	var node := Button.new()
 	node.text = text_value
@@ -698,6 +847,55 @@ static func mini_countdown_bar(fill_color: Color) -> ProgressBar:
 	fill.set_border_width_all(0)
 	bar.add_theme_stylebox_override("fill", fill)
 	return bar
+
+
+## 语义化进度条 · 运转/读秒类（翠玉绿）：动作运转、三才槽位、垂钓煮茶等
+static func progress_bar_run(height: float = BAR_HEIGHT_RUN) -> ProgressBar:
+	return _capsule_bar(COLOR_BAR_RUN, height)
+
+
+## 语义化进度条 · 积累/成长类（暖金棕）：火候、灵田生长、悟道池等
+static func progress_bar_grow(height: float = BAR_HEIGHT_GROW) -> ProgressBar:
+	return _capsule_bar(COLOR_BAR_GROW, height)
+
+
+## 胶囊形统一：圆角 = min(3, 高/2)，槽底统一暖米灰深色 + 1px 描边
+static func _capsule_bar(color: Color, height: float) -> ProgressBar:
+	var bar := progress_bar(color, height)
+	var radius := mini(BAR_CAPSULE_RADIUS, int(floorf(height * 0.5)))
+	bar.add_theme_stylebox_override("background",
+		panel_box(COLOR_BAR_TRACK, COLOR_BAR_TRACK_EDGE, radius, 1, 0))
+	bar.add_theme_stylebox_override("fill", bar_fill_box(color, radius))
+	return bar
+
+
+static var _bar_fill_cache: Dictionary = {}
+
+
+## 胶囊填充样式（无描边、无端点圆头）：同色同圆角复用，切槽只换样式引用
+static func bar_fill_box(color: Color, radius: int = BAR_CAPSULE_RADIUS) -> StyleBoxFlat:
+	var cache_key := "%s|%d" % [color.to_html(true), radius]
+	var cached: StyleBoxFlat = _bar_fill_cache.get(cache_key, null)
+	if cached != null:
+		return cached
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = color
+	fill.set_corner_radius_all(radius)
+	fill.content_margin_left = 0
+	fill.content_margin_right = 0
+	fill.content_margin_top = 0
+	fill.content_margin_bottom = 0
+	fill.anti_aliasing = true
+	_bar_fill_cache[cache_key] = fill
+	return fill
+
+
+## 运行时切换进度条填充色（三才专属色）：只换只读样式，不重建进度条节点
+static func set_bar_fill(bar: ProgressBar, color: Color,
+		radius: int = BAR_CAPSULE_RADIUS) -> void:
+	if bar == null:
+		return
+	bar.add_theme_stylebox_override("fill", bar_fill_box(color, radius))
 
 
 static func progress_bar(fill_color: Color = COLOR_JADE, height: float = 10.0) -> ProgressBar:
@@ -933,6 +1131,26 @@ const COLOR_GRADE_3_MYSTIC := Color("#1E62A8")   # 三阶 · 玄材（沧溟蓝�
 const COLOR_GRADE_4_IMMORTAL := Color("#7B369E") # 四阶 · 仙材（紫霞绛）
 const COLOR_GRADE_5_DIVINE := Color("#BA5B10")   # 五阶 · 神材（赤金辉，区别于危险朱砂）
 
+# ---------------------------------------------------------------- 大境界语义配色
+## 九重大境界唯一配色：炼气朱砂 → 筑基翠玉 → 金丹鎏金 → 元婴沧溟 →
+## 化神紫霞 → 炼虚赤金 → 合体灵翠 → 大乘素砚 → 真仙绛紫。
+## 顶栏境界印、CharacterPanel 境界徽章与侧栏境界副文本共用此表。
+const REALM_TIER_COLORS: Array[Color] = [
+	Color("#B34233"), # 0 炼气
+	Color("#276953"), # 1 筑基
+	Color("#9A6822"), # 2 金丹
+	Color("#1E62A8"), # 3 元婴
+	Color("#7B369E"), # 4 化神
+	Color("#BA5B10"), # 5 炼虚
+	Color("#227454"), # 6 合体
+	Color("#7A7165"), # 7 大乘
+	Color("#8A4B7F"), # 8 真仙圆满
+]
+
+
+static func realm_tier_color(tier: int) -> Color:
+	return REALM_TIER_COLORS[clampi(tier, 0, REALM_TIER_COLORS.size() - 1)]
+
 
 # ---------------------------------------------------------------- UI 物理微动效
 ## 全站一次性 Tween 管理：挂在节点 meta 上，新动画自动 kill 旧的（防连点打架/错位）。
@@ -1035,15 +1253,25 @@ static func press_release(button: BaseButton) -> void:
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
 
-## 三才槽位指示色（全站唯一口径）：
-## 0 主修 黛玉青 / 1 分神 鎏金琥珀 / 2 化身 紫霞绛
+## 三才槽位专属色（全站唯一口径）：
+## 0 主修 翠玉绿 / 1 分神 靛青蓝 / 2 化身 紫霄紫
 static func slot_dot_color(slot_idx: int) -> Color:
 	match clampi(slot_idx, 0, 2):
 		1:
-			return COLOR_TEXT_GOLD
+			return COLOR_SLOT_SPIRIT
 		2:
-			return COLOR_GRADE_4_IMMORTAL
-	return COLOR_TEXT_JADE
+			return COLOR_SLOT_AVATAR
+	return COLOR_SLOT_MAIN
+
+
+## 槽位卡片内底色：专属色高度提亮，保持宣纸卡片的温润观感
+static func slot_paper_color(slot_idx: int) -> Color:
+	return slot_dot_color(slot_idx).lightened(0.90)
+
+
+## 槽位圆点色别名：新代码语义更直白，旧调用点继续可用
+static func slot_color(slot_idx: int) -> Color:
+	return slot_dot_color(slot_idx)
 
 
 static func get_material_grade_color(tier: int) -> Color:
@@ -1244,16 +1472,28 @@ static func style_scrollbar(bar: ScrollBar) -> void:
 
 # ---------------------------------------------------------------- 三才槽位按钮
 
-## 主修 / 分神 / 化身：同字体、同字号、同高度、同圆角，只靠配色分层（避免「分神」看起来像禁用）
+## 主修 / 分神 / 化身：同字体、同字号、同高度、同圆角，只靠三才专属色分层
+## （0 翠玉绿实底 / 1 靛青蓝浅底 / 2 紫霄紫浅底；避免「分神」看起来像禁用）
 const SLOT_BUTTON_PALETTE: Dictionary = {
-	0: {"bg": "#276953", "border": "#1E5644", "fg": "#FBF8F2", "hover": "#1F5D49", "pressed": "#1B5140"},
-	1: {"bg": "#E5EFEA", "border": "#276953", "fg": "#1E5644", "hover": "#DBEAE4", "pressed": "#D5E5DE"},
-	2: {"bg": "#F5ECDC", "border": "#8F6022", "fg": "#7A5018", "hover": "#EFE3CE", "pressed": "#EADBC2"},
+	0: {"bg": "#215A4F", "border": "#1A483F", "fg": "#FBF8F2", "hover": "#1D5147", "pressed": "#19463E"},
+	1: {"bg": "#E4EBF2", "border": "#2E5C7E", "fg": "#264C68", "hover": "#D9E3EC", "pressed": "#CFDCE8"},
+	2: {"bg": "#EBE5EF", "border": "#6E4B7E", "fg": "#5A3D68", "hover": "#E2D9E8", "pressed": "#DACFE2"},
 }
-## 停止态：朱砂暖红浅底 + 描边，与未运转态明显区分
+## 停止 / 卸下态：朱砂暖红浅底 + 描边，与未运转态明显区分
+## （百艺「停止主修」与藏经阁「卸下」共用同一份色板，避免两处走样）
 const STOP_BUTTON_PALETTE: Dictionary = {
-	"bg": "#F7EAE6", "border": "#B34233", "fg": "#9E3527",
-	"hover": "#F1DFDA", "pressed": "#EBD2CC",
+	"bg": "#FAF0EE", "border": "#B24D42", "fg": "#9E3527",
+	"hover": "#F5E4E0", "pressed": "#EFD8D3",
+}
+## 运转态：翠玉实底 + 宣纸白字（全站主操作语义，与三才「主修」同族）
+const OPERATE_BUTTON_PALETTE: Dictionary = {
+	"bg": "#215A4F", "border": "#1A483F", "fg": "#FBF8F2",
+	"hover": "#1D5147", "pressed": "#19463E",
+}
+## 消耗态：暖金浅底 + 金褐描边（兑换 / 参悟等花贡献的次级操作）
+const CONSUME_BUTTON_PALETTE: Dictionary = {
+	"bg": "#F7F0E0", "border": "#C9A66B", "fg": "#8A6218",
+	"hover": "#F2E8D2", "pressed": "#EBDCC0",
 }
 
 
@@ -1269,6 +1509,43 @@ static func apply_stop_slot_button(button: Button) -> void:
 	if button == null:
 		return
 	_apply_slot_palette(button, STOP_BUTTON_PALETTE)
+
+
+# ---------------------------------------------------------------- 列表操作按钮语义
+# 同一行常并排出现三类按钮，必须一眼分清：
+#   运转 → 翠玉实底主操作；卸下 → 朱砂浅底撤回；兑换 / 参悟 → 暖金浅底消耗。
+# 三者统一 44px 高、8px 圆角、2px 描边，只有主操作使用 FONT_BODY 正文字号。
+
+static func apply_operate_button(button: Button) -> void:
+	_apply_action_palette(button, OPERATE_BUTTON_PALETTE)
+
+
+static func apply_withdraw_button(button: Button) -> void:
+	_apply_action_palette(button, STOP_BUTTON_PALETTE)
+
+
+static func apply_consume_button(button: Button) -> void:
+	_apply_action_palette(button, CONSUME_BUTTON_PALETTE)
+
+
+static func _apply_action_palette(button: Button, palette: Dictionary) -> void:
+	if button == null:
+		return
+	var bg := Color(String(palette["bg"]))
+	var border := Color(String(palette["border"]))
+	var fg := Color(String(palette["fg"]))
+	button.custom_minimum_size = Vector2(0, TOUCH_MIN)
+	button.add_theme_stylebox_override("normal", panel_box(bg, border, 8, 2, 8))
+	button.add_theme_stylebox_override("hover",
+		panel_box(Color(String(palette["hover"])), border, 8, 2, 8))
+	button.add_theme_stylebox_override("pressed",
+		panel_box(Color(String(palette["pressed"])), border, 8, 2, 8))
+	button.add_theme_stylebox_override("disabled",
+		panel_box(COLOR_SUBTLE, COLOR_BORDER, 8, 1, 8))
+	for key in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		button.add_theme_color_override(key, fg)
+	button.add_theme_color_override("font_disabled_color", COLOR_TEXT_MUTED)
+	apply_font_size(button, FONT_BODY)
 
 
 ## 统一套用：2px 描边（1.5px 在 StyleBoxFlat 里只能取整）+ 8px 内边距，44 高可容纳 4 字
@@ -1509,19 +1786,19 @@ static func decorate_button(button_node: Button, left_text: String, right_text: 
 	button_node.add_child(row)
 	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	row.offset_left = 14.0
-	row.offset_right = -14.0
+	row.offset_right = -12.0
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_theme_constant_override("separation", 6)
+	row.add_theme_constant_override("separation", 5)
 
 	var icon_node: TextureRect = null
 	if icon != null:
 		icon_node = icon_rect(icon, 20)
 		button_node.add_child(icon_node)
 		icon_node.set_anchors_and_offsets_preset(Control.PRESET_CENTER_LEFT)
-		icon_node.offset_left = 12.0
+		icon_node.offset_left = 10.0
 		icon_node.offset_top = -10.0
 		icon_node.offset_bottom = 10.0
-		row.offset_left = 42.0
+		row.offset_left = 38.0
 
 	var left := label(left_text, maxi(FONT_CARD_TITLE - 1, 15))
 	apply_brush_kai(left)
@@ -1536,8 +1813,9 @@ static func decorate_button(button_node: Button, left_text: String, right_text: 
 	row.add_child(right)
 
 	# 「dot」升级为圆点组容器（HBox）：同一行可并排多枚槽位色圆点
+	# 6px 点径 + 3px 点距：三槽同时点亮也只占 24px，不再把「采药寻灵」挤成省略号
 	var dot := HBoxContainer.new()
-	dot.add_theme_constant_override("separation", 2)
+	dot.add_theme_constant_override("separation", ROW_DOT_GAP)
 	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(dot)
@@ -1546,17 +1824,41 @@ static func decorate_button(button_node: Button, left_text: String, right_text: 
 	return {"left": left, "right": right, "dot": dot, "icon": icon_node}
 
 
-## 行内运行圆点组：按颜色数组重建（空数组=清空隐藏；多槽并发时并排多枚）
+## 行内圆点直径 / 点距（三才圆点唯一尺寸口径）
+const ROW_DOT_SIZE: float = 6.0
+const ROW_DOT_GAP: int = 3
+
+
+## 行内运行圆点组：按颜色数组原地复用（空数组=清空隐藏；多槽并发时并排多枚）
+## 严禁每次切页 queue_free 重建：只增删差额节点、只换样式引用。
 static func set_row_dots(dot_box: Container, colors: Array) -> void:
 	if dot_box == null:
 		return
-	for child in dot_box.get_children():
-		dot_box.remove_child(child)
-		child.queue_free()
-	for color in colors:
-		var dot := PanelContainer.new()
-		dot.custom_minimum_size = Vector2(8, 8)
-		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		dot.add_theme_stylebox_override("panel", circle_box(color, 8.0))
-		dot_box.add_child(dot)
+	var existing := dot_box.get_children()
+	for i in range(colors.size()):
+		var color: Color = colors[i]
+		var dot: PanelContainer = null
+		if i < existing.size():
+			dot = existing[i] as PanelContainer
+			if dot == null:
+				continue
+			if dot.has_meta("dot_color") and (dot.get_meta("dot_color") as Color) == color:
+				continue
+		else:
+			dot = PanelContainer.new()
+			dot.custom_minimum_size = Vector2(ROW_DOT_SIZE, ROW_DOT_SIZE)
+			dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			dot_box.add_child(dot)
+		dot.set_meta("dot_color", color)
+		dot.add_theme_stylebox_override("panel", circle_box(color, ROW_DOT_SIZE))
+	# 多余额度隐藏而不是销毁，下一次点亮可直接复用
+	for i in range(colors.size(), existing.size()):
+		var extra := existing[i] as Control
+		if extra != null:
+			extra.visible = false
+	for i in range(mini(colors.size(), existing.size())):
+		var shown := existing[i] as Control
+		if shown != null:
+			shown.visible = true
 	dot_box.visible = not colors.is_empty()

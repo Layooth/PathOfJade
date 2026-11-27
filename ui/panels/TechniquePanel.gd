@@ -232,23 +232,29 @@ func _rebuild_slots() -> void:
 	for i in range(4):
 		var slot := PanelContainer.new()
 		slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		slot.add_theme_stylebox_override("panel", ThemeBuilder.panel_box(
-			ThemeBuilder.COLOR_CARD_DEEP, ThemeBuilder.COLOR_BORDER, 8, 1, 8))
 		var box := ThemeBuilder.vbox(2)
 		slot.add_child(box)
+		var tech_id := ""
+		if i < slot_count and i < GameState.equipped_techniques.size():
+			tech_id = String(GameState.equipped_techniques[i])
+		var occupied := tech_id != ""
+		# 占用槽位用淡翠玉底 + 翠玉描边，与空闲/未解锁槽位一眼分开
+		slot.add_theme_stylebox_override("panel", ThemeBuilder.panel_box(
+			Color("#EEF5F1") if occupied else ThemeBuilder.COLOR_CARD_DEEP,
+			ThemeBuilder.COLOR_JADE_DARK if occupied else ThemeBuilder.COLOR_BORDER,
+			8, 2 if occupied else 1, 8))
 		if i >= slot_count:
 			box.add_child(ThemeBuilder.label(SLOT_NAMES[i], ThemeBuilder.FONT_CAPTION,
 				ThemeBuilder.COLOR_TEXT_DIM))
-			box.add_child(ThemeBuilder.label("%s解锁" % String(next_realm.get(i, "更高境界")), 10,
-				ThemeBuilder.COLOR_TEXT_DIM))
+			box.add_child(ThemeBuilder.label("%s解锁" % String(next_realm.get(i, "更高境界")),
+				ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM))
 			_slots_box.add_child(slot)
 			continue
-		var tech_id := String(GameState.equipped_techniques[i]) \
-			if i < GameState.equipped_techniques.size() else ""
 		box.add_child(ThemeBuilder.label(SLOT_NAMES[i], ThemeBuilder.FONT_CAPTION,
-			ThemeBuilder.COLOR_JADE))
+			ThemeBuilder.COLOR_JADE_DARK if occupied else ThemeBuilder.COLOR_JADE))
 		if tech_id == "":
-			box.add_child(ThemeBuilder.label("空闲", 11, ThemeBuilder.COLOR_TEXT_DIM))
+			box.add_child(ThemeBuilder.label("空闲", ThemeBuilder.FONT_CAPTION,
+				ThemeBuilder.COLOR_TEXT_DIM))
 			_slots_box.add_child(slot)
 			continue
 		var tech := DataRegistry.get_technique(tech_id)
@@ -259,8 +265,9 @@ func _rebuild_slots() -> void:
 		ThemeBuilder.apply_technique_grade_style(name_label, tech_id)
 		box.add_child(name_label)
 		var off := ThemeBuilder.small_button("卸下")
-		off.custom_minimum_size = Vector2(0, ThemeBuilder.TOUCH_MIN)
-		ThemeBuilder.apply_font_size(off, ThemeBuilder.FONT_CAPTION)
+		off.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ThemeBuilder.apply_withdraw_button(off)
+		ThemeBuilder.clip_button_text(off, "卸下《%s》" % (tech.name if tech != null else tech_id))
 		off.pressed.connect(func() -> void:
 			GameState.unequip_technique(tech_id)
 			_play_equip_stamp(slot)
@@ -274,10 +281,11 @@ func _build_card(tech: TechniqueData) -> PanelContainer:
 	var equipped := GameState.is_technique_equipped(tech.id)
 	var level := GameState.get_technique_level(tech.id)
 	var card := ThemeBuilder.card_panel(ThemeBuilder.COLOR_CARD, ThemeBuilder.COLOR_BORDER, 12, 12)
+	card.set_meta("tech_id", tech.id)
 	if equipped:
+		# 运转中：淡翠玉宣纸底 + 2px 翠玉描边，与未运转的素白卡片拉开层次
 		card.add_theme_stylebox_override("panel", ThemeBuilder.panel_box(
-			ThemeBuilder.card_color(ThemeBuilder.COLOR_CARD),
-			ThemeBuilder.COLOR_JADE, 12, 1, 12))
+			Color("#EEF5F1"), ThemeBuilder.COLOR_JADE_DARK, 12, 2, 12))
 	var outer := ThemeBuilder.hbox(8)
 	card.add_child(outer)
 	# 轻点卡片空白处：功法背景 + 1~5 重阶梯 + 掉落秘境
@@ -296,13 +304,18 @@ func _build_card(tech: TechniqueData) -> PanelContainer:
 	box.add_child(title_row)
 	var tech_title := ThemeBuilder.card_title_label("《%s》" % tech.name)
 	ThemeBuilder.apply_technique_grade_style(tech_title, tech.id)
+	# 长名裁切：标题独占可伸缩区，右侧让位给流派章、「N 重」与「运转中」徽章
+	tech_title.clip_text = true
+	tech_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	tech_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(tech_title)
 	title_row.add_child(ThemeBuilder.create_seal_badge(tech.school_name(),
 		"gold" if tech.school == "sword" else ("jade" if tech.school == "wood" else "cinnabar")))
-	title_row.add_child(ThemeBuilder.expander())
 	if unlocked:
 		title_row.add_child(ThemeBuilder.label("%d 重" % level, ThemeBuilder.FONT_CAPTION,
-			ThemeBuilder.COLOR_JADE))
+			ThemeBuilder.COLOR_JADE_DARK if equipped else ThemeBuilder.COLOR_JADE))
+		if equipped:
+			title_row.add_child(_running_badge(tech))
 
 	# ② 单行当前生效加成（超出省略号），完整 1~5 重成长阶梯收进详情浮层
 	var details := _effect_text(tech, 1 if not unlocked else level)
@@ -317,31 +330,38 @@ func _build_card(tech: TechniqueData) -> PanelContainer:
 	if not unlocked:
 		if tech.is_drop_only():
 			box.add_child(ThemeBuilder.dim_label("头目掉落：%s（%.0f%%）· 可贡献保底兑换" % [
-				DataRegistry.get_enemy_name(tech.drop_enemy_id), tech.drop_chance * 100.0], 10))
+				DataRegistry.get_enemy_name(tech.drop_enemy_id), tech.drop_chance * 100.0],
+				ThemeBuilder.FONT_CAPTION))
 		var cost := tech.unlock_cost_points
 		var unlock_button := ThemeBuilder.small_button("兑换 · 贡献 %d" % cost)
 		unlock_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		# 消耗类操作统一暖金底：与「运转」（翠玉实底）「卸下」（朱砂浅底）彻底分开
+		ThemeBuilder.apply_consume_button(unlock_button)
 		ThemeBuilder.apply_font_size(unlock_button, ThemeBuilder.FONT_CAPTION)
 		unlock_button.disabled = GameState.alliance_points < cost
-		if not unlock_button.disabled:
-			ThemeBuilder.apply_primary_button(unlock_button)
+		ThemeBuilder.clip_button_text(unlock_button,
+			"消耗 %d 仙盟贡献兑换《%s》" % [cost, tech.name])
 		unlock_button.pressed.connect(func() -> void: GameState.unlock_technique(tech.id))
 		actions.add_child(unlock_button)
 		return card
 
 	if equipped:
+		# 卸下：朱砂浅底撤回态，与百艺「停止主修」同色板
 		var off := ThemeBuilder.small_button("卸下")
 		off.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		ThemeBuilder.apply_font_size(off, ThemeBuilder.FONT_CAPTION)
+		ThemeBuilder.apply_withdraw_button(off)
+		ThemeBuilder.clip_button_text(off, "卸下《%s》" % tech.name)
 		off.pressed.connect(func() -> void:
 			GameState.unequip_technique(tech.id)
 			_play_equip_stamp(icon)
 		)
 		actions.add_child(off)
 	else:
+		# 运转：翠玉实底主操作，一眼可点
 		var on := ThemeBuilder.small_button("运转")
 		on.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		ThemeBuilder.apply_font_size(on, ThemeBuilder.FONT_CAPTION)
+		ThemeBuilder.apply_operate_button(on)
+		ThemeBuilder.clip_button_text(on, "装配《%s》并开始运转" % tech.name)
 		on.pressed.connect(func() -> void:
 			GameState.equip_technique(tech.id)
 			_play_equip_stamp(icon)
@@ -354,13 +374,32 @@ func _build_card(tech: TechniqueData) -> PanelContainer:
 		var up := ThemeBuilder.small_button("参悟 · %d贡献/%d灵石" % [
 			int(cost["points"]), int(cost["stones"])])
 		up.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ThemeBuilder.apply_consume_button(up)
 		ThemeBuilder.apply_font_size(up, ThemeBuilder.FONT_CAPTION)
 		up.disabled = not bool(check.get("ok", false))
 		if up.disabled:
 			up.text = String(check.get("reason", "材料不足"))
+		ThemeBuilder.clip_button_text(up, "消耗贡献与灵石提升《%s》重数" % tech.name)
 		up.pressed.connect(GameState.upgrade_technique.bind(tech.id))
-		actions.add_child(up)
+		# 参悟单独占一行：贡献/灵石数值在高字档下再长也不会挤压「运转 / 卸下」
+		box.add_child(up)
 	return card
+
+
+## 运转中徽章：翠玉高亮小章，紧随「N 重」右侧；扫视列表即可识别，无需读按钮
+func _running_badge(tech: TechniqueData) -> PanelContainer:
+	var slot_index := GameState.equipped_techniques.find(tech.id)
+	var badge := PanelContainer.new()
+	badge.size_flags_horizontal = Control.SIZE_SHRINK_END
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_theme_stylebox_override("panel",
+		ThemeBuilder.panel_box(Color("#E2EFEA"), ThemeBuilder.COLOR_JADE_DARK, 6, 1, 7))
+	badge.add_child(ThemeBuilder.label("• 运转中", ThemeBuilder.FONT_CAPTION,
+		ThemeBuilder.COLOR_JADE_DARK))
+	if slot_index >= 0 and slot_index < SLOT_NAMES.size():
+		badge.tooltip_text = "装配于%s" % SLOT_NAMES[slot_index]
+	return badge
 
 
 func _effect_text(tech: TechniqueData, level: int) -> String:

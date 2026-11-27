@@ -7,6 +7,9 @@ var _texture_rect: TextureRect
 var _glow: TextureRect
 var _pulse_tween: Tween
 var _frame_size: int = 48
+## 帧底样式与径向背光按颜色复用：储物袋 170 格不再各建一份渐变纹理与 StyleBox
+static var _frame_style: StyleBoxFlat
+static var _radial_cache: Dictionary = {}
 
 
 func _ready() -> void:
@@ -21,9 +24,7 @@ func setup(texture: Texture2D, frame_size: int = 48, accent: Color = ThemeBuilde
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	var style := ThemeBuilder.panel_box(ThemeBuilder.COLOR_ICON_FRAME,
-		ThemeBuilder.COLOR_ICON_FRAME_BORDER, 8, 1, 4)
-	add_theme_stylebox_override("panel", style)
+	add_theme_stylebox_override("panel", _shared_frame_style())
 
 	_glow = TextureRect.new()
 	_glow.texture = _make_radial(accent)
@@ -61,10 +62,9 @@ func set_icon(texture: Texture2D, accent: Color = Color(0, 0, 0, 0)) -> void:
 	if accent.a > 0.0:
 		_accent = accent
 		if _glow != null:
-			_glow.texture = _make_radial(accent)
-		add_theme_stylebox_override("panel",
-			ThemeBuilder.panel_box(ThemeBuilder.COLOR_ICON_FRAME,
-				ThemeBuilder.COLOR_ICON_FRAME_BORDER, 8, 1, 4))
+			var radial := _make_radial(accent)
+			if _glow.texture != radial:
+				_glow.texture = radial
 
 
 func set_pulsing(enabled: bool) -> void:
@@ -82,7 +82,18 @@ func set_pulsing(enabled: bool) -> void:
 	_pulse_tween.tween_property(_glow, "modulate:a", 0.18, 0.9).set_trans(Tween.TRANS_SINE)
 
 
+func _shared_frame_style() -> StyleBoxFlat:
+	if _frame_style == null:
+		_frame_style = ThemeBuilder.panel_box(ThemeBuilder.COLOR_ICON_FRAME,
+			ThemeBuilder.COLOR_ICON_FRAME_BORDER, 8, 1, 4)
+	return _frame_style
+
+
 func _make_radial(color: Color) -> GradientTexture2D:
+	var cache_key := color.to_html(true)
+	var cached: Variant = _radial_cache.get(cache_key, null)
+	if cached is GradientTexture2D:
+		return cached as GradientTexture2D
 	var gradient := Gradient.new()
 	gradient.set_color(0, Color(color.r, color.g, color.b, 0.30))
 	gradient.set_color(1, Color(color.r, color.g, color.b, 0.0))
@@ -93,4 +104,5 @@ func _make_radial(color: Color) -> GradientTexture2D:
 	texture.fill_to = Vector2(1.0, 0.5)
 	texture.width = 96
 	texture.height = 96
+	_radial_cache[cache_key] = texture
 	return texture

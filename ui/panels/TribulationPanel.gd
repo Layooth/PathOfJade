@@ -6,6 +6,8 @@ const MAX_LOG_LINES: int = 24
 
 var _req_box: VBoxContainer
 var _is_dirty: bool = false
+## 条件签名：普通材料掉落不改变天劫条件时，不重建条件卡
+var _req_sig: String = ""
 var _start_button: Button
 var _dao_heart_label: Label
 var _limit_chip: PanelContainer
@@ -216,7 +218,6 @@ func refresh_requirements() -> void:
 		_is_dirty = true
 		return
 	_is_dirty = false
-	_clear(_req_box)
 	var realm := GameState.get_realm()
 	var is_bottleneck := realm != null and realm.requires_tribulation
 	var full := GameState.is_cultivation_full()
@@ -226,22 +227,37 @@ func refresh_requirements() -> void:
 	var damages: Array = [] if realm == null else realm.tribulation_damages
 	var duration := 20.0 if realm == null else realm.tribulation_duration
 	var trib_name := "天劫" if realm == null or realm.tribulation_name == "" else realm.tribulation_name
+	var tier := 0 if realm == null else realm.tier
+	var stacks := GameState.get_dao_heart_stacks(tier)
+	var percent := int(floor(GameState.cultivation_xp
+		/ maxf(1.0, GameState.get_realm_requirement()) * 100.0))
+	# 后台掉落普通草药不改门票 / 修为 / 道心 / 飞升条件：签名一致直接返回，不重建条件卡
+	var sig_parts: PackedStringArray = [
+		"未知" if realm == null else realm.display_name,
+		str(is_bottleneck), str(full), str(ticket_count), str(percent), str(stacks),
+	]
+	if realm != null and realm.tribulation_target == "magnificent":
+		var asc := FiveElementsSystem.ascension_ready()
+		sig_parts.append("%s|%s|%s" % [str(asc.get("cultivation_ticket_ok", false)),
+			str(asc.get("natal_ok", false)), str(asc.get("laws_ok", false))])
+	var req_sig := "|".join(sig_parts)
+	if req_sig == _req_sig and _req_box.get_child_count() > 0:
+		return
+	_req_sig = req_sig
+	_clear(_req_box)
 
 	_title_label.text = "引动%s" % trib_name
 	_limit_label.text = "限时 %d 秒" % int(duration)
 	if _realm_label != null:
 		_realm_label.text = "当前境界 · %s" % ("未知" if realm == null else realm.display_name)
 
-	var tier := 0 if realm == null else realm.tier
-	var stacks := GameState.get_dao_heart_stacks(tier)
-
 	_add_req_row("%s修为圆满" % ("当前境界" if is_bottleneck else "（当前境界无需渡劫）"),
 		is_bottleneck and full,
 		"当前：%s（修为 %d%%）" % [
 			"已至瓶颈" if is_bottleneck else ("%s" % ("未知" if realm == null else realm.display_name)),
 			# 与顶栏一致向下取整，避免 99.6% 显示成 100% 却仍不可引劫
-			int(floor(GameState.cultivation_xp / maxf(1.0, GameState.get_realm_requirement()) * 100.0)),
-		])
+			percent,
+			])
 	_add_ticket_row(ticket_id, ticket_name, ticket_count)
 	_add_req_row("玄龟盾符 / 厚土护身符（择优护体）",
 		true, "天雷降下前优先消耗玄龟盾符（-55%），无则用厚土护身符（-40%）")
@@ -536,6 +552,9 @@ func _on_started() -> void:
 
 
 func _on_updated(elapsed: float, duration: float, hp: int, max_hp: int, next_in: float) -> void:
+	if not is_visible_in_tree():
+		_is_dirty = true
+		return
 	_timeline_bar.value = clampf(elapsed / maxf(1.0, duration), 0.0, 1.0)
 	var ratio := clampf(float(hp) / float(maxi(1, max_hp)), 0.0, 1.0)
 	UiMotion.set_afterimage_value(_hp_bar, ratio)
@@ -548,6 +567,9 @@ func _on_updated(elapsed: float, duration: float, hp: int, max_hp: int, next_in:
 
 
 func _on_thunder(index: int, damage: int, warded: bool, hp: int, max_hp: int) -> void:
+	if not is_visible_in_tree():
+		_is_dirty = true
+		return
 	_style_pip(index, true)
 	var ratio := clampf(float(hp) / float(maxi(1, max_hp)), 0.0, 1.0)
 	UiMotion.set_afterimage_value(_hp_bar, ratio)
@@ -639,6 +661,9 @@ func _on_realm_changed(_realm_id: String, _realm_name: String) -> void:
 
 func _append_log(line: String) -> void:
 	if _log_box == null:
+		return
+	if not is_visible_in_tree():
+		_is_dirty = true
 		return
 	_log_box.add_child(ThemeBuilder.wrap_label(line, ThemeBuilder.FONT_BODY_SUB))
 	while _log_box.get_child_count() > MAX_LOG_LINES:

@@ -17,6 +17,8 @@ var _cards: Array[Control] = []
 var _poll: float = 0.0
 var _rebuild_queued: bool = false
 var _is_dirty: bool = false
+## 悬赏对象签名：id / 目标未变时仅就地刷新进度与交付按钮
+var _bounty_sig: String = ""
 
 
 func _ready() -> void:
@@ -204,6 +206,27 @@ func rebuild() -> void:
 	else:
 		ThemeBuilder.apply_primary_button(_free_button)
 	ThemeBuilder.apply_secondary_button(_paid_button)
+
+	# 悬赏对象本身没换（后台掉材料只推进度）时：只就地刷新每张卡的进度与交付按钮，
+	# 不销毁 / 重建任何卡片，滚动位置自然保持不动。
+	var sig_parts: PackedStringArray = []
+	for bounty_value in GameState.active_bounties:
+		var bounty: Dictionary = bounty_value
+		sig_parts.append("%s|%s|%d" % [String(bounty.get("id", "")),
+			String(bounty.get("target_id", "")), int(bounty.get("remaining", 0))])
+	var bounty_sig := "\n".join(sig_parts)
+	if bounty_sig == _bounty_sig and _cards.size() == GameState.active_bounties.size():
+		var valid := true
+		for card_value in _cards:
+			var card := card_value as Control
+			if card == null or not is_instance_valid(card):
+				valid = false
+				break
+		if valid:
+			for i in range(_cards.size()):
+				_refresh_card_state(_cards[i] as PanelContainer, GameState.active_bounties[i])
+			return
+	_bounty_sig = bounty_sig
 	for child in _grid.get_children():
 		_grid.remove_child(child)
 		child.queue_free()
@@ -253,10 +276,11 @@ func _build_card(index: int, bounty: Dictionary) -> PanelContainer:
 		title_row.add_child(ThemeBuilder.chip("急令", ThemeBuilder.COLOR_TEXT_GOLD))
 	title_row.add_child(ThemeBuilder.expander())
 
-	# ② 单行进度目标：达标玉青、未达标浓墨
-	var progress := BountyManager.get_progress_text(bounty)
-	box.add_child(ThemeBuilder.label(progress, ThemeBuilder.FONT_BODY_SUB,
-		ThemeBuilder.COLOR_TEXT_JADE if can_submit else ThemeBuilder.COLOR_TEXT_PRIMARY))
+	# ② 单行进度目标：达标玉青、未达标浓墨（留引用供后台掉落时就地改写）
+	var progress_label := ThemeBuilder.label(BountyManager.get_progress_text(bounty),
+		ThemeBuilder.FONT_BODY_SUB,
+		ThemeBuilder.COLOR_TEXT_JADE if can_submit else ThemeBuilder.COLOR_TEXT_PRIMARY)
+	box.add_child(progress_label)
 
 	# ③ 紧凑奖励摘要（单行省略，技能经验等明细收进委托书浮层）
 	var reward_label := ThemeBuilder.label("灵石 +%s · 贡献 +%d" % [
@@ -281,9 +305,37 @@ func _build_card(index: int, bounty: Dictionary) -> PanelContainer:
 		ThemeBuilder.apply_primary_button(submit)
 	submit.pressed.connect(_on_submit_pressed.bind(index, submit))
 	box.add_child(submit)
+	card.set_meta("bounty_progress_label", progress_label)
+	card.set_meta("bounty_submit", submit)
 	# 轻点卡片空白处：完整委托书 + 目标来源快捷跳转
 	ThemeBuilder.make_card_tappable(card, func() -> void: _show_detail(bounty, is_kill))
 	return card
+
+
+## 就地刷新：只改进度文本 / 颜色与交付按钮态，不碰节点树
+func _refresh_card_state(card: PanelContainer, bounty: Dictionary) -> void:
+	var progress_value: Variant = card.get_meta("bounty_progress_label", null)
+	var submit_value: Variant = card.get_meta("bounty_submit", null)
+	var progress_label := progress_value as Label
+	var submit := submit_value as Button
+	if progress_label == null or submit == null:
+		return
+	var can_submit := BountyManager.can_submit(bounty)
+	progress_label.text = BountyManager.get_progress_text(bounty)
+	progress_label.add_theme_color_override("font_color",
+		ThemeBuilder.COLOR_TEXT_JADE if can_submit else ThemeBuilder.COLOR_TEXT_PRIMARY)
+	var submit_text := "交付领奖"
+	if BountyManager.daily_limit_reached():
+		submit_text = "今日已满额"
+	elif not can_submit:
+		submit_text = "进度不足"
+	if submit.text != submit_text:
+		submit.text = submit_text
+	submit.disabled = not can_submit
+	if can_submit:
+		ThemeBuilder.apply_primary_button(submit)
+	else:
+		ThemeBuilder.apply_secondary_button(submit)
 
 
 ## 委托书浮层：完整委托说明、精确进度、完整奖励，并给出目标来源跳转

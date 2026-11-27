@@ -8,6 +8,8 @@ const MAX_LOG_LINES: int = 40
 var _enemy_buttons: Dictionary = {}
 var _region_buttons: Dictionary = {}
 var _body: BoxContainer
+## 宽屏外层：两栏 HBox 在上、战斗纪要全宽卡在下；竖屏时纪要回归整页单列
+var _wide_box: VBoxContainer
 var _left_col: VBoxContainer
 var _right_col: VBoxContainer
 ## 竖屏整页滚动容器：450×800 且 1.20 大字时，六块内容必然超出可视区
@@ -42,6 +44,11 @@ var _start_button: Button
 var _stop_button: Button
 var _log_box: VBoxContainer
 var _log_scroll: ScrollContainer
+## 空战况提示：无记录时只占一行淡墨灰，有战报即隐藏
+var _log_empty_label: Label
+## 宽屏日志卡原始最小高：剩余高度自适应时以此为基准，竖屏原样恢复
+var _bottom_base_h: float = 120.0
+var _fit_frames: int = 0
 var _auto_heal_button: Button
 var _auto_talisman_button: Button
 var _is_dirty: bool = false
@@ -53,6 +60,7 @@ func _ready() -> void:
 	_build()
 	_connect_signals()
 	visibility_changed.connect(_on_visibility_changed)
+	resized.connect(_on_self_resized)
 	refresh_all()
 
 
@@ -62,6 +70,10 @@ func _realm_fighting() -> bool:
 
 
 func _process(_delta: float) -> void:
+	# 宽屏延展：布局重排后连算 4 帧，等两栏高度稳定再定稿
+	if _fit_frames > 0:
+		_fit_frames -= 1
+		_fit_wide_bottom()
 	# 双向隔离：镇魔塔战斗不驱动秘境舞台蓄势条/连胜（归零静止）
 	if not _realm_fighting():
 		if _stage != null:
@@ -107,24 +119,25 @@ func _build() -> void:
 	title_row.add_child(help)
 	title_row.add_child(ThemeBuilder.expander())
 	title_row.move_child(help, -1)
-	# 攻防命中独立成行（右对齐、可省略、可看 tooltip）：
-	# 六位数值不再与标题、「自动回合」chip、右侧「?」抢同一行宽度
-	var stats_row := ThemeBuilder.hbox(4)
-	head_box.add_child(stats_row)
-	_stats_label = ThemeBuilder.dim_label("", ThemeBuilder.FONT_BODY_SUB)
-	_stats_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_stats_label.clip_text = true
-	_stats_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	stats_row.add_child(_stats_label)
+	# 己方攻防命中：左对齐独占「秘境历练」下方一行，明确主语，不再挂在「?」底下
+	_stats_label = ThemeBuilder.wrap_label_phrases("", ThemeBuilder.FONT_BODY_SUB,
+		ThemeBuilder.COLOR_TEXT_SECONDARY)
+	_stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_stats_label.clip_text = false
+	head_box.add_child(_stats_label)
 	ThemeBuilder.attach_header_watermark(header, IconLibrary.get_nav_icon("combat"))
 
 	# 宽屏左右双栏：左舞台+战斗纪要，右页签+自动应对
+	_wide_box = ThemeBuilder.vbox(10)
+	_wide_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_wide_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(_wide_box)
 	_body = BoxContainer.new()
 	_body.vertical = true
 	_body.add_theme_constant_override("separation", 10)
+	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(_body)
+	_wide_box.add_child(_body)
 	_left_col = ThemeBuilder.vbox(8)
 	_left_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_left_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -204,6 +217,7 @@ func _build() -> void:
 	enemy_row.add_child(_enemy_boss_chip)
 	_enemy_stat_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_BODY_SUB,
 		ThemeBuilder.COLOR_TEXT_DIM)
+	ThemeBuilder.enable_phrase_wrap(_enemy_stat_label)
 	battle_box.add_child(_enemy_stat_label)
 	_enemy_lock_label = ThemeBuilder.wrap_label("", ThemeBuilder.FONT_CAPTION,
 		ThemeBuilder.COLOR_CINNABAR)
@@ -211,7 +225,14 @@ func _build() -> void:
 	_enemy_lock_label.visible = false
 	battle_box.add_child(_enemy_lock_label)
 	# 掉落文本用品阶着色 BBCode（九幽玄晶/龙血草等按凡~神材五色）
+	# 掉落整段用单个自适应折行的 RichTextLabel：严格在卡片内宽折行，不横向溢出
 	_enemy_loot_label = ThemeBuilder.bbcode_label("", ThemeBuilder.FONT_BODY_SUB)
+	_enemy_loot_label.bbcode_enabled = true
+	_enemy_loot_label.fit_content = true
+	_enemy_loot_label.scroll_active = false
+	_enemy_loot_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_enemy_loot_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_enemy_loot_label.custom_minimum_size.x = 0.0
 	battle_box.add_child(_enemy_loot_label)
 
 	# 蓄势条已并入对战舞台（紧贴血条下方），详情卡不再重复展示
@@ -307,9 +328,23 @@ func _build() -> void:
 	_log_scroll = ThemeBuilder.scroll_container()
 	_log_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	log_outer.add_child(_log_scroll)
+	# 上下留白：滚到最新一条时首行不贴顶切头
+	var log_margin := MarginContainer.new()
+	log_margin.add_theme_constant_override("margin_left", 5)
+	log_margin.add_theme_constant_override("margin_right", 5)
+	log_margin.add_theme_constant_override("margin_top", 5)
+	log_margin.add_theme_constant_override("margin_bottom", 5)
+	log_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	log_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_log_scroll.add_child(log_margin)
 	_log_box = ThemeBuilder.vbox(2)
 	_log_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_log_scroll.add_child(_log_box)
+	log_margin.add_child(_log_box)
+	_log_empty_label = ThemeBuilder.wrap_label(
+		"尚未交锋，轻触「开始历练」后将在此记录战况",
+		ThemeBuilder.FONT_CAPTION, ThemeBuilder.COLOR_TEXT_DIM)
+	ThemeBuilder.apply_font_size(_log_empty_label, ThemeBuilder.FONT_CAPTION)
+	_log_box.add_child(_log_empty_label)
 	for line in CombatEngine.get_log_lines():
 		_append_log_line(line)
 
@@ -339,13 +374,27 @@ func _apply_layout(workspace_width: float) -> void:
 		return
 	var compact := workspace_width < 680.0
 	_body.vertical = compact
+	# 宽屏两栏只取所需高度，纪要紧随其后；竖屏整页滚动仍占满剩余高度
+	_body.size_flags_vertical = Control.SIZE_EXPAND_FILL if compact \
+		else Control.SIZE_SHRINK_BEGIN
+	if _log_panel != null:
+		_log_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _left_col != null:
 		_left_col.visible = not compact
+		_left_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_left_col.size_flags_stretch_ratio = 1.05
 	if _right_col != null:
 		_right_col.visible = not compact
+		# 两列在 HBox 内等高拉伸：左列详情卡底边与右列自动应对底边齐平
+		_right_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_right_col.size_flags_stretch_ratio = 1.0
 		_right_col.custom_minimum_size = Vector2(0 if compact else 400, 0)
+	if _battle_panel != null:
+		_battle_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN if compact \
+			else Control.SIZE_EXPAND_FILL
+	if _auto_panel != null:
+		_auto_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN if compact \
+			else Control.SIZE_EXPAND_FILL
 	if _compact_scroll != null:
 		_compact_scroll.visible = compact
 	# 秘境共 8 个：竖屏排成 1 行横滑（8 列），宽屏回到 2 列网格。
@@ -353,13 +402,47 @@ func _apply_layout(workspace_width: float) -> void:
 	if _region_row != null:
 		_region_row.columns = 8 if compact else 2
 	if compact:
+		# 竖屏保持原单列：舞台 → 选择 → 详情 → 自动应对 → 纪要
 		_stack_nodes(_compact_box, [
 			_stage, _region_scroll, _enemy_tabs, _battle_panel,
 			_auto_panel, _log_panel,
 		])
+		if _log_panel != null:
+			_bottom_base_h = 120.0
+			_log_panel.custom_minimum_size.y = _bottom_base_h
+			_log_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	else:
-		_stack_nodes(_left_col, [_stage, _battle_panel, _log_panel])
+		# 宽屏：两栏在上，纪要移出左列，作为整宽底卡铺满主面板
+		_stack_nodes(_left_col, [_stage, _battle_panel])
 		_stack_nodes(_right_col, [_region_scroll, _enemy_tabs, _auto_panel])
+		_stack_nodes(_wide_box, [_body, _log_panel])
+		if _log_panel != null:
+			_bottom_base_h = 120.0
+			_log_panel.custom_minimum_size.y = _bottom_base_h
+			_log_panel.size_flags_vertical = Control.SIZE_FILL
+			call_deferred("_fit_wide_bottom")
+
+
+func _on_self_resized() -> void:
+	_request_fit()
+
+
+func _request_fit() -> void:
+	_fit_frames = 4
+
+
+## 宽屏：把纪要卡补高到面板底部安全边距；竖屏完全交给整页滚动
+func _fit_wide_bottom() -> void:
+	if _body == null or _log_panel == null or _log_panel.get_parent() != _wide_box:
+		return
+	if get_viewport().get_visible_rect().size.x < 840:
+		return
+	# 直接按「两栏底边 → 面板底边」的可用高计算，避免迭代式补高受旧尺寸影响
+	# 再减 10 为两栏与纪要之间的正常间距，最终底边留 10px 安全边距
+	var available := get_global_rect().end.y - _body.get_global_rect().end.y - 20.0
+	var target := maxf(_bottom_base_h, available)
+	if absf(target - _log_panel.custom_minimum_size.y) > 0.6:
+		_log_panel.custom_minimum_size.y = target
 
 
 ## 按给定顺序 reparent 并重排（节点可能已经在该容器中）
@@ -529,26 +612,34 @@ func _apply_enemy_header(enemy: EnemyData) -> void:
 	if enemy.dodge > 0.0:
 		stat_text += " · 闪避 %.0f%% · 有效命中 %.0f%%" % [
 			enemy.dodge * 100.0, _effective_hit(enemy) * 100.0]
-	_enemy_stat_label.text = stat_text
-	_enemy_loot_label.text = "掉落：%s" % ThemeBuilder.colorize_item_names_bbcode(
-		enemy.get_loot_text())
+	_enemy_stat_label.text = ThemeBuilder.protect_phrases(stat_text)
+	# 先按物品品阶着色，再做防断词（WJ 只作用于可见文字，不会破坏 BBCode 色标）
+	var loot_bbcode := ThemeBuilder.colorize_item_names_bbcode(enemy.get_loot_text())
+	_enemy_loot_label.text = "掉落：%s" % ThemeBuilder.protect_phrases(loot_bbcode)
 
 
 func _refresh_stats() -> void:
+	if not is_visible_in_tree():
+		_is_dirty = true
+		return
 	var stats := GameState.get_player_stats()
 	var attack := int(stats["attack"])
 	var defense := int(stats["defense"])
 	var accuracy := int(round(float(stats.get("raw_accuracy", stats["accuracy"])) * 100.0))
-	# 万/亿紧凑格式：450 宽 + 1.20 大字档下六位攻防也不再被省略号截断
-	_stats_label.text = "攻%s 防%s 命中%d%%" % [
+	# 万/亿紧凑格式 + 「己方：」主语；词组用 · 分隔，沿用全站防断词口径
+	_stats_label.text = ThemeBuilder.protect_phrases("己方：攻%s · 防%s · 命中%d%%" % [
 		GameFormulas.format_num(float(attack)),
-		GameFormulas.format_num(float(defense)), accuracy]
+		GameFormulas.format_num(float(defense)), accuracy])
 	# 悬停/长按仍能看全量精确值
-	_stats_label.tooltip_text = "攻击 %d · 防御 %d · 命中 %d%%" % [attack, defense, accuracy]
+	_stats_label.tooltip_text = "己方：攻击 %d · 防御 %d · 命中 %d%%" % [
+		attack, defense, accuracy]
 
 
 func _refresh_auto_stock() -> void:
 	if _auto_heal_button == null:
+		return
+	if not is_visible_in_tree():
+		_is_dirty = true
 		return
 	var heal_stock := _stock_total(DataRegistry.HEAL_ITEMS)
 	var ward_stock := _stock_total(DataRegistry.WARD_ITEMS)
@@ -811,7 +902,14 @@ func _on_combat_log(line: String) -> void:
 func _append_log_line(line: String) -> void:
 	if _log_box == null:
 		return
-	_log_box.add_child(ThemeBuilder.wrap_label(line, 12, ThemeBuilder.COLOR_TEXT))
+	# 隐藏页不追加节点（战斗可能在后台继续，回来只显示之后的新战报）
+	if not is_visible_in_tree():
+		_is_dirty = true
+		return
+	if _log_empty_label != null and _log_empty_label.visible:
+		_log_empty_label.visible = false
+	_log_box.add_child(ThemeBuilder.wrap_label(line, ThemeBuilder.FONT_CAPTION,
+		ThemeBuilder.COLOR_TEXT))
 	while _log_box.get_child_count() > MAX_LOG_LINES:
 		var first := _log_box.get_child(0)
 		_log_box.remove_child(first)
@@ -893,9 +991,11 @@ func _on_stop_pressed() -> void:
 
 func _on_visibility_changed() -> void:
 	set_process(is_visible_in_tree())
-	if is_visible_in_tree() and _is_dirty:
-		_is_dirty = false
-		refresh_all()
+	if is_visible_in_tree():
+		_request_fit()
+		if _is_dirty:
+			_is_dirty = false
+			refresh_all()
 
 
 func _on_threshold_changed(value: float) -> void:
@@ -904,6 +1004,9 @@ func _on_threshold_changed(value: float) -> void:
 
 
 func _on_combat_updated(payload: Dictionary) -> void:
+	if not is_visible_in_tree():
+		_is_dirty = true
+		return
 	# 双向隔离：镇魔塔战斗的实时 payload 不进秘境面板
 	if not _realm_fighting():
 		refresh_all()

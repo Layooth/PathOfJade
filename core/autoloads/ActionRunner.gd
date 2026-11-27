@@ -138,6 +138,8 @@ func get_double_chance(action_id: String) -> float:
 	var chance := GameFormulas.mastery_double_chance(GameState.get_mastery_level(action_id))
 	# 本命祭炼（兵刃）：每 5 级全百艺双倍概率 +0.5%
 	chance += GameState.get_temper_double_bonus()
+	# 灵茶（寒髓金髓仙茗）：全百艺双倍几率加成
+	chance += FishingTeaSystem.get_bonus("double_chance")
 	# 本命法宝：掌天灵鼎成长直接提升百艺双倍产出
 	chance += GameState.get_natal_bonus("double_chance")
 	# 火之法则：每重双倍产出 +4%

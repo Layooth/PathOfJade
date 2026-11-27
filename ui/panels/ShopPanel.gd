@@ -13,6 +13,8 @@ var _filter_buttons: Dictionary = {}
 var _list_box: GridContainer
 var _rebuild_queued: bool = false
 var _is_dirty: bool = false
+## 货架状态签名：普通材料掉落不改灵石 / 已购等级 / 灵种库存时直接跳过整页重建
+var _state_sig: String = ""
 
 
 func _ready() -> void:
@@ -110,8 +112,6 @@ func _on_visibility_changed() -> void:
 func rebuild() -> void:
 	if _list_box == null:
 		return
-	_clear(_list_box)
-
 	var items: Array = DataRegistry.get_shop_upgrades_by_category(_filter)
 	items.sort_custom(func(a: ShopUpgradeData, b: ShopUpgradeData) -> bool:
 		var a_owned := _is_maxed(a)
@@ -120,6 +120,21 @@ func rebuild() -> void:
 			return not a_owned
 		return a.cost_stones < b.cost_stones
 	)
+	# 后台掉落普通草药 / 矿石不改变货架语义：签名一致就地返回，不销毁任何卡片
+	var sig_parts: PackedStringArray = [_filter,
+		str(GameState.get_item_count(DataRegistry.SPIRIT_STONE))]
+	for item_value in items:
+		var upgrade := item_value as ShopUpgradeData
+		var extra := GameState.get_item_count(upgrade.effect_target) \
+			if upgrade.category == "seed" else 0
+		sig_parts.append("%s:%d:%d" % [upgrade.id,
+			GameState.get_upgrade_level(upgrade.id), extra])
+	var state_sig := "\n".join(sig_parts)
+	if state_sig == _state_sig and _list_box.get_child_count() > 0:
+		return
+	_state_sig = state_sig
+	_clear(_list_box)
+
 	if items.is_empty():
 		_list_box.add_child(ThemeBuilder.dim_label("此处暂无货品。", 13))
 		return

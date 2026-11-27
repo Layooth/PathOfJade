@@ -37,6 +37,13 @@ const CROP_ACCENTS: Dictionary = {
 ## IconSvgPack.ITEM_KEY_MAP 之外的补漏
 const ITEM_KEY_EXTRA: Dictionary = {
 	"item_spirit_stone": "item_spirit_stone",
+	# 六枚精绘物品：DataRegistry id 与 IconSvgPack 模板键保持同名一一绑定
+	"item_cuiyun_wood": "item_cuiyun_wood",
+	"item_spirit_fish": "item_spirit_fish",
+	"item_qingwen_fish": "item_qingwen_fish",
+	"item_hantan_eel": "item_hantan_eel",
+	"item_chilin_fish": "item_chilin_fish",
+	"item_jinsui_dragonfish": "item_jinsui_dragonfish",
 }
 
 ## 渡劫阵盘：UI 专用 200×200 模板，明确归类，不参与物品图标映射与图鉴统计
@@ -74,6 +81,9 @@ const KEY_ALIASES: Dictionary = {
 	"it_brush": "gear_brush",
 	"it_array": "gear_array",
 	"it_seed": "item_seed",
+	# 洞府烹茶：两款新灵茶独立键显式登记，避免旧档 icon 别名回落
+	"tea_crimson_battle": "tea_crimson_battle",
+	"tea_immortal_marrow": "tea_immortal_marrow",
 	# v4 高阶妖兽已全部升级为独立模板（enemy_<id>），不再走家族别名
 }
 
@@ -269,6 +279,34 @@ func get_enemy_icon(enemy_id: String) -> ImageTexture:
 
 func get_ui_icon(ui_key: String) -> ImageTexture:
 	return get_icon("ui_%s" % ui_key)
+
+
+## 洞府烹茶六款灵茶：茶 id → 独立模板键 / 专属点缀色（统一归一化到 48 画布）
+const TEA_ICON_KEYS: Dictionary = {
+	"wudao_tea": "tea_wudao",
+	"ningshen_tea": "tea_ningshen",
+	"poe_tea": "tea_poe",
+	"lingyu_tea": "tea_fish_soup",
+	"chilin_tea": "tea_crimson_battle",
+	"xianming_tea": "tea_immortal_marrow",
+}
+const TEA_ACCENTS: Dictionary = {
+	"wudao_tea": "#2A6F62",
+	"ningshen_tea": "#3B6EA8",
+	"poe_tea": "#B34233",
+	"lingyu_tea": "#2A6B8C",
+	"chilin_tea": "#C2432D",
+	"xianming_tea": "#9A6822",
+}
+
+
+func get_tea_icon(tea_id: String, icon_hint: String = "") -> ImageTexture:
+	var key := String(TEA_ICON_KEYS.get(tea_id, icon_hint))
+	if key == "":
+		key = "tea_pot"
+	var accent := String(TEA_ACCENTS.get(tea_id, DEFAULT_ACCENT))
+	var source := get_icon(key, DEFAULT_PRIMARY, accent)
+	return get_normalized_icon("tea|%s" % key, source, 48, 4)
 
 
 ## 道藏功法 21 枚独立精绘模板的水墨双色（{C1} 主线条 / {C2} 点缀）：

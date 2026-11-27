@@ -156,6 +156,11 @@ func get_log_lines() -> Array[String]:
 	return _log_lines.duplicate()
 
 
+## 镇魔塔独立战报（与秘境纪要双向隔离，面板只追加不重建）
+func get_tower_log_lines() -> Array[String]:
+	return _tower_log_lines.duplicate()
+
+
 ## 当前是否镇魔塔战斗（秘境/镇魔塔双模式双向隔离判定）
 func is_tower_mode() -> bool:
 	return active and tower_floor > 0

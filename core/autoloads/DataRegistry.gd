@@ -188,6 +188,22 @@ const ITEM_DEFS: Array = [
 		"desc": "灵潭中灵气滋养的灵鱼，可售换灵石或入茶提鲜。",
 	},
 	{
+		"id": "item_qingwen_fish", "name": "青纹灵鲫", "cat": CAT_MATERIAL, "element": E_WATER, "sell": 40,
+		"desc": "青纹细鳞的灵潭小鲫，灵性温润，可作灵田肥材或化灵换灵石。",
+	},
+	{
+		"id": "item_chilin_fish", "name": "赤鳞火鲤", "cat": CAT_MATERIAL, "element": E_FIRE, "sell": 160,
+		"desc": "赤鳞如火、尾鳍带金的火性灵鲤，入茶可激荡斗战锋芒。",
+	},
+	{
+		"id": "item_hantan_eel", "name": "寒潭银鳗", "cat": CAT_MATERIAL, "element": E_WATER, "sell": 380,
+		"desc": "生于寒潭深处的银青长鳗，灵息绵长，可入高阶仙茶。",
+	},
+	{
+		"id": "item_jinsui_dragonfish", "name": "金髓龙鱼", "cat": CAT_MATERIAL, "element": E_METAL, "sell": 900,
+		"desc": "脊生金髓、尾拖淡金霞光的稀世灵鱼，可入仙茶或作高阶祭炼灵材。",
+	},
+	{
 		"id": "item_qi_pill", "name": "聚气丹", "cat": CAT_CONSUMABLE, "element": E_FIRE, "sell": 10,
 		"cultivation": 45, "desc": "吞服可凝聚灵气，直接转化 45 点境界修为；吐纳时可自动服用。",
 	},
@@ -2212,6 +2228,8 @@ const TECHNIQUE_DEFS: Array = [
 ]
 
 var items: Dictionary = {}
+## 物品阶位只读缓存：品阶计算会遍历全部动作/妖兽/坊市，列表排序时不能反复重算
+var _item_grade_cache: Dictionary = {}
 var actions: Dictionary = {}
 var enemies: Dictionary = {}
 var realms: Dictionary = {}
@@ -2251,6 +2269,7 @@ func rebuild_registries() -> void:
 	region_enemies.clear()
 	regions.clear()
 	_item_sources.clear()
+	_item_grade_cache.clear()
 	_load_all()
 
 
@@ -2350,29 +2369,29 @@ func _register_realms() -> void:
 			{"id": "core_late", "name": "金丹后期", "req": 14000000.0, "hp": 640, "atk": 62, "def": 34, "trib": true},
 		]},
 		{"tier": 3, "cap": 80, "offline": 24.0, "mult": 0.9, "rows": [
-			{"id": "nascent_early", "name": "元婴初期", "req": 28000000.0, "hp": 760, "atk": 76, "def": 42},
-			{"id": "nascent_mid", "name": "元婴中期", "req": 52000000.0, "hp": 1000, "atk": 102, "def": 58},
-			{"id": "nascent_late", "name": "元婴后期", "req": 85000000.0, "hp": 1240, "atk": 128, "def": 74, "trib": true},
+			{"id": "nascent_early", "name": "元婴初期", "req": 13050000.0, "hp": 760, "atk": 76, "def": 42},
+			{"id": "nascent_mid", "name": "元婴中期", "req": 24650000.0, "hp": 1000, "atk": 102, "def": 58},
+			{"id": "nascent_late", "name": "元婴后期", "req": 39150000.0, "hp": 1240, "atk": 128, "def": 74, "trib": true},
 		]},
 		{"tier": 4, "cap": 100, "offline": 24.0, "mult": 0.85, "rows": [
-			{"id": "spirit_early", "name": "化神初期", "req": 150000000.0, "hp": 1500, "atk": 152, "def": 88},
-			{"id": "spirit_mid", "name": "化神中期", "req": 260000000.0, "hp": 1800, "atk": 176, "def": 102},
-			{"id": "spirit_late", "name": "化神后期", "req": 420000000.0, "hp": 2150, "atk": 200, "def": 116, "trib": true},
+			{"id": "spirit_early", "name": "化神初期", "req": 45000000.0, "hp": 1500, "atk": 152, "def": 88},
+			{"id": "spirit_mid", "name": "化神中期", "req": 78000000.0, "hp": 1800, "atk": 176, "def": 102},
+			{"id": "spirit_late", "name": "化神后期", "req": 126000000.0, "hp": 2150, "atk": 200, "def": 116, "trib": true},
 		]},
 		{"tier": 5, "cap": 120, "offline": 24.0, "mult": 0.85, "rows": [
-			{"id": "void_early", "name": "炼虚初期", "req": 720000000.0, "hp": 2500, "atk": 230, "def": 130},
-			{"id": "void_mid", "name": "炼虚中期", "req": 1200000000.0, "hp": 2900, "atk": 260, "def": 145},
-			{"id": "void_late", "name": "炼虚后期", "req": 1900000000.0, "hp": 3350, "atk": 295, "def": 160, "trib": true},
+			{"id": "void_early", "name": "炼虚初期", "req": 200000000.0, "hp": 2500, "atk": 230, "def": 130},
+			{"id": "void_mid", "name": "炼虚中期", "req": 340000000.0, "hp": 2900, "atk": 260, "def": 145},
+			{"id": "void_late", "name": "炼虚后期", "req": 530000000.0, "hp": 3350, "atk": 295, "def": 160, "trib": true},
 		]},
 		{"tier": 6, "cap": 135, "offline": 24.0, "mult": 0.8, "rows": [
-			{"id": "unity_early", "name": "合体初期", "req": 3200000000.0, "hp": 3800, "atk": 330, "def": 175},
-			{"id": "unity_mid", "name": "合体中期", "req": 5200000000.0, "hp": 4300, "atk": 370, "def": 190},
-			{"id": "unity_late", "name": "合体后期", "req": 8000000000.0, "hp": 4850, "atk": 410, "def": 205, "trib": true},
+			{"id": "unity_early", "name": "合体初期", "req": 830000000.0, "hp": 3800, "atk": 330, "def": 175},
+			{"id": "unity_mid", "name": "合体中期", "req": 1350000000.0, "hp": 4300, "atk": 370, "def": 190},
+			{"id": "unity_late", "name": "合体后期", "req": 2100000000.0, "hp": 4850, "atk": 410, "def": 205, "trib": true},
 		]},
 		{"tier": 7, "cap": 150, "offline": 24.0, "mult": 0.8, "rows": [
-			{"id": "great_early", "name": "大乘初期", "req": 13000000000.0, "hp": 5450, "atk": 455, "def": 220},
-			{"id": "great_mid", "name": "大乘中期", "req": 21000000000.0, "hp": 6100, "atk": 505, "def": 235},
-			{"id": "great_late", "name": "大乘后期", "req": 32000000000.0, "hp": 6800, "atk": 560, "def": 250, "trib": true},
+			{"id": "great_early", "name": "大乘初期", "req": 2700000000.0, "hp": 5450, "atk": 455, "def": 220},
+			{"id": "great_mid", "name": "大乘中期", "req": 4400000000.0, "hp": 6100, "atk": 505, "def": 235},
+			{"id": "great_late", "name": "大乘后期", "req": 6800000000.0, "hp": 6800, "atk": 560, "def": 250, "trib": true},
 		]},
 	]
 	for stage in stage_defs:
@@ -2450,7 +2469,7 @@ func _register_realms() -> void:
 	dacheng_tribulation.tribulation_item = "item_trib_dacheng"
 	dacheng_tribulation.tribulation_duration = 34.0
 	dacheng_tribulation.tribulation_target = "great_early"
-	dacheng_tribulation.tribulation_damages = [2600, 2900, 3200, 3500, 3800, 4100, 4400, 4700, 5000]
+	dacheng_tribulation.tribulation_damages = [2000, 2300, 2500, 2700, 3000, 3200, 3400, 3700, 3900]
 
 	# ---- 飞升天劫：大乘后期 → 真仙圆满（9 雷 / 36 秒 / 渡劫飞升丹） ----
 	var ascension_tribulation: RealmData = realms["great_late"]
@@ -2458,7 +2477,7 @@ func _register_realms() -> void:
 	ascension_tribulation.tribulation_item = "item_ascension_pill"
 	ascension_tribulation.tribulation_duration = 36.0
 	ascension_tribulation.tribulation_target = "magnificent"
-	ascension_tribulation.tribulation_damages = [3600, 4000, 4400, 4800, 5200, 5600, 6000, 6400, 6800]
+	ascension_tribulation.tribulation_damages = [2800, 3100, 3400, 3700, 4000, 4300, 4600, 4900, 5200]
 
 
 func _register_items() -> void:
@@ -2703,8 +2722,8 @@ func _build_item_source_index() -> void:
 				"label": "洞府灵田 · 种植%s（伴生）" % seed_name,
 			})
 
-	# 4) 灵潭清茗 · 垂钓
-	for item_id in ["item_spirit_dew", "item_spirit_fish"]:
+	# 4) 灵潭清茗 · 垂钓（五档灵鱼 + 清露全量反查）
+	for item_id in ["item_spirit_dew"] + FISH_IDS:
 		_add_item_source(item_id, {
 			"type": "fishing_tea", "page_id": "fishing_tea",
 			"label": "灵潭清茗 · 垂钓",
@@ -2895,6 +2914,9 @@ func get_all_herb_ids() -> Array[String]:
 	var out: Array[String] = []
 	for entry in entries:
 		out.append(String(entry["id"]))
+	# 低阶灵鱼亦可作肥材（青纹灵鲫：灵潭垂钓前期稳定消化口）
+	for fish_id in FISH_FERTILIZER_IDS:
+		out.append(String(fish_id))
 	return out
 
 
@@ -2909,6 +2931,23 @@ func get_herb_unlock_level(herb_id: String) -> int:
 
 # ---------------------------------------------------------------- 低阶材料一键化灵
 
+## 灵潭五档灵鱼（阶梯生态）：钓获来源无百艺动作/妖兽掉落可反查，
+## 故显式登记等效解锁等级（换算品阶：10 凡 / 30 灵 / 40 灵 / 60 玄 / 90 仙）。
+const FISH_IDS: Array = [
+	"item_qingwen_fish", "item_spirit_fish", "item_chilin_fish",
+	"item_hantan_eel", "item_jinsui_dragonfish",
+]
+const FISH_UNLOCK_LEVELS: Dictionary = {
+	"item_qingwen_fish": 10,
+	"item_spirit_fish": 30,
+	"item_chilin_fish": 40,
+	"item_hantan_eel": 60,
+	"item_jinsui_dragonfish": 90,
+}
+## 可作灵田肥材的灵鱼（低阶小鱼消化出口）
+const FISH_FERTILIZER_IDS: Array = ["item_qingwen_fish"]
+
+
 ## 材料来源阶位与品类：
 ##   wood_ore  = 伐木 / 采矿产出（unlock_level 取两系中较低者）
 ##   herb_other = 采药产出与妖兽基础材料（妖兽取掉落秘境 tier 对齐的首境界技能上限）
@@ -2921,6 +2960,10 @@ func get_material_tier_info(item_id: String) -> Dictionary:
 		return {}
 	if String(item_id).begins_with("seed_"):
 		return {}
+	# 灵潭灵鱼：显式阶位（供一键化灵 / 施肥候选阶位判定）
+	if FISH_UNLOCK_LEVELS.has(item_id):
+		return {"category": "herb_other",
+			"unlock_level": int(FISH_UNLOCK_LEVELS[item_id])}
 	var best := {}
 	for skill_id in ["woodcutting", "mining"]:
 		for action_id in get_action_ids_for_skill(skill_id):
@@ -2956,15 +2999,31 @@ func get_material_grade(item_id: String) -> Dictionary:
 	return get_item_grade(item_id)
 
 
+## 万物品阶（只读缓存入口）：排序 / 列表刷新会高频调用，避免每次遍历全量动作表
+func get_item_grade(item_id: String) -> Dictionary:
+	var key := String(item_id)
+	if _item_grade_cache.has(key):
+		return (_item_grade_cache[key] as Dictionary).duplicate()
+	var grade := _compute_item_grade(key)
+	_item_grade_cache[key] = grade
+	return grade.duplicate()
+
+
 ## 万物品阶：覆盖材料/灵种/丹药/灵符/装备（货币除外），1~5 阶。
 ## unlock_level 优先级：① 灵种→收获草药 ② 全部百艺动作产出 ③ 妖兽掉落
 ## ④ 坊市门槛 ⑤ 售价保底推算。
-func get_item_grade(item_id: String) -> Dictionary:
+func _compute_item_grade(item_id: String) -> Dictionary:
 	var item := get_item(item_id)
 	if item == null or item.category == ItemData.Category.CURRENCY:
 		return {}
 	if String(item_id) == SPIRIT_STONE:
 		return {}
+	# ⓪ 灵潭灵鱼：显式阶位（价格保底推算会失真，须以生态档位为准）
+	if FISH_UNLOCK_LEVELS.has(item_id):
+		var fish_level := int(FISH_UNLOCK_LEVELS[item_id])
+		var fish_grade := GameFormulas.get_material_grade_by_level(fish_level)
+		fish_grade["unlock_level"] = fish_level
+		return fish_grade
 	# ① 灵种映射到对应收获草药的同款品阶
 	if String(item_id).begins_with("seed_"):
 		for seed_def in SEED_DEFS:

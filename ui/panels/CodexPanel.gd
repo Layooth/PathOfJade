@@ -139,6 +139,9 @@ var _layout_mode: int = EventBus.LayoutMode.COMPACT
 var _rebuild_queued: bool = false
 var _is_dirty: bool = false
 var _grid_signature: String = ""
+## 图鉴卡片池：同一分页内按「id」复用，发现状态变化时只重建对应一张
+var _card_cache: Dictionary = {}
+var _cache_tab: String = ""
 
 
 func _ready() -> void:
@@ -290,6 +293,10 @@ func _on_visibility_changed() -> void:
 func rebuild() -> void:
 	if _grid == null:
 		return
+	# 上一轮分帧补建未完成：完成后统一重刷，避免被高频收集信号反复打断
+	if not _pending_entries.is_empty():
+		_rebuild_pending = true
+		return
 	_grid.add_theme_constant_override("h_separation", 8)
 	_grid.add_theme_constant_override("v_separation", 8)
 	var entries := _entries()
@@ -331,16 +338,132 @@ func rebuild() -> void:
 		_milestone_row.add_child(badge)
 
 	_apply_width(EventBus.workspace_width)
-	for child in _grid.get_children():
-		_grid.remove_child(child)
-		child.queue_free()
+	# 换分页才整页重建；同一分页内的状态变化走卡片池复用
 	if _tab == "scripture":
+		_cache_tab = _tab
+		_clear_card_cache()
+		for child in _grid.get_children():
+			_grid.remove_child(child)
+			child.queue_free()
 		_build_scripture_cards()
 		return
-	for entry in entries:
-		var card := _build_card(entry)
-		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_grid.add_child(card)
+	if _cache_tab != _tab:
+		_cache_tab = _tab
+		_clear_card_cache()
+		for child in _grid.get_children():
+			_grid.remove_child(child)
+			child.queue_free()
+	_rebuild_cards_pooled(entries)
+
+
+## 同分页卡片池：发现的词条保留原节点，只新建「新发现」或「未收录 → 已收录」的卡片。
+## 首次铺满同样分帧补建（每帧最多 CARD_CHUNK 张），避免整页数百个节点同帧构建。
+const CARD_CHUNK: int = 8
+var _rebuild_gen: int = 0
+var _rebuild_cursor: int = 0
+var _pending_entries: Array = []
+var _pending_prev: Dictionary = {}
+var _pending_next: Dictionary = {}
+var _rebuild_pending: bool = false
+
+
+func _rebuild_cards_pooled(entries: Array) -> void:
+	_rebuild_gen += 1
+	var gen := _rebuild_gen
+	_rebuild_cursor = 0
+	_pending_entries = entries
+	_pending_prev = _card_cache.duplicate()
+	_pending_next = {}
+	# 旧卡片先摘出容器（保留节点供复用），避免切分页时旧词条闪现在前排
+	for key in _pending_prev.keys():
+		var old_node: Variant = (_pending_prev[key] as Dictionary).get("node", null)
+		if old_node is Node and (old_node as Node).get_parent() == _grid:
+			_grid.remove_child(old_node as Node)
+	if _rebuild_step(gen):
+		_finish_card_rebuild(gen)
+	else:
+		_drive_card_rebuild(gen)
+
+
+func _rebuild_step(gen: int) -> bool:
+	if gen != _rebuild_gen or _grid == null:
+		return true
+	var target := mini(_rebuild_cursor + CARD_CHUNK, _pending_entries.size())
+	while _rebuild_cursor < target:
+		var entry: Dictionary = _pending_entries[_rebuild_cursor]
+		var entry_id := String(entry.get("id", ""))
+		var found := bool(entry.get("found", false))
+		var cache_key := "%s|%s" % [_tab, entry_id]
+		var cached: Variant = _pending_prev.get(cache_key, null)
+		var node: Button = null
+		if cached is Dictionary:
+			var cached_node: Variant = (cached as Dictionary).get("node", null)
+			if cached_node is Button and is_instance_valid(cached_node) \
+					and bool((cached as Dictionary).get("found", false)) == found:
+				node = cached_node as Button
+		if node == null:
+			if cached is Dictionary:
+				var stale: Variant = (cached as Dictionary).get("node", null)
+				if stale is Node and is_instance_valid(stale):
+					_free_card_node(stale as Node)
+			node = _build_card(entry)
+			node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ThemeBuilder.prepare_touch(node)
+		_card_cache[cache_key] = {"node": node, "found": found}
+		_pending_next[cache_key] = true
+		if node.get_parent() != _grid:
+			if node.get_parent() != null:
+				node.get_parent().remove_child(node)
+			_grid.add_child(node)
+		_grid.move_child(node, _rebuild_cursor)
+		_rebuild_cursor += 1
+	return _rebuild_cursor >= _pending_entries.size()
+
+
+func _drive_card_rebuild(gen: int) -> void:
+	while gen == _rebuild_gen and is_inside_tree():
+		# 切走后暂停补建，切回再续：后台补建不与当前页抢帧
+		if not is_visible_in_tree():
+			await visibility_changed
+			continue
+		await get_tree().process_frame
+		if gen != _rebuild_gen or not is_inside_tree():
+			return
+		if _rebuild_step(gen):
+			_finish_card_rebuild(gen)
+			return
+
+
+func _finish_card_rebuild(gen: int) -> void:
+	if gen != _rebuild_gen:
+		return
+	for key in _pending_prev.keys():
+		if _pending_next.has(key):
+			continue
+		var leftover: Variant = (_pending_prev[key] as Dictionary).get("node", null)
+		if leftover is Node and is_instance_valid(leftover):
+			_free_card_node(leftover as Node)
+		_card_cache.erase(key)
+	_pending_entries = []
+	_pending_prev = {}
+	ThemeBuilder.prepare_touch(self)
+	if _rebuild_pending:
+		_rebuild_pending = false
+		call_deferred("rebuild")
+
+
+func _free_card_node(node: Node) -> void:
+	if node.get_parent() != null:
+		node.get_parent().remove_child(node)
+	node.queue_free()
+
+
+func _clear_card_cache() -> void:
+	for key in _card_cache.keys():
+		var node: Variant = (_card_cache[key] as Dictionary).get("node", null)
+		if node is Node and is_instance_valid(node):
+			_free_card_node(node as Node)
+	_card_cache.clear()
 
 
 ## 设置页「修行典籍」入口：跳到万象玉简并切到典籍分页

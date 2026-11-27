@@ -70,7 +70,7 @@ func _draw() -> void:
 		Rect2(0, 0, width, height))
 	if _display_ratio > 0.0:
 		var fill_width := maxf(float(radius), width * _display_ratio)
-		draw_style_box(ThemeBuilder.flat_box(ThemeBuilder.COLOR_TEXT_GOLD,
+		draw_style_box(ThemeBuilder.flat_box(ThemeBuilder.COLOR_BAR_GROW,
 			ThemeBuilder.PROGRESS_FILL_RADIUS, 0, 0), Rect2(0, 0, fill_width, height))
 	for i in range(THRESHOLDS.size()):
 		var center := Vector2(width * float(THRESHOLDS[i]), height * 0.5)

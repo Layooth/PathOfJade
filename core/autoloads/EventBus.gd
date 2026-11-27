@@ -35,6 +35,8 @@ signal font_scale_changed(scale: float)
 var current_layout: int = LayoutMode.COMPACT
 var current_viewport: Vector2 = Vector2.ZERO
 var workspace_width: float = 540.0
+## 当前前台页面 key（由 MainShell 切页时写入；音频等 AutoLoad 只读，不反向依赖 UI）
+var current_page: String = ""
 
 # ---- 修行纪要（右侧态势栏） ----
 signal activity_log_added(entry: Dictionary)

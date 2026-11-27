@@ -52,7 +52,9 @@ var pity_counters: Dictionary = {}
 ## 大境界奖励倍率（炼气 1x → 真仙 200x）：悬赏灵石与镇魔俸禄共用
 const REALM_REWARD_MULT: Array = [1.0, 1.5, 3.0, 6.0, 12.0, 25.0, 50.0, 100.0, 200.0]
 ## 本源雷压校准：按无头满配模拟反推，随天劫阶位递减，目标单劫总掉血 45%~75%。
-const TRIBULATION_SOURCE_SCALE: Array[float] = [0.0, 0.0, 0.0, 4.4, 4.1, 3.8, 3.5, 3.3, 3.2]
+## 3 / 4 档（化神 / 炼虚）校准到满配护符承伤约 70% 血池；
+## 6 / 7 档（大乘 / 飞升）维持约 79% 血池，其余档不变。
+const TRIBULATION_SOURCE_SCALE: Array[float] = [0.0, 0.0, 0.0, 2.15, 2.45, 3.8, 2.7, 2.5, 3.2]
 ## ---- 藏经阁 ----
 var unlocked_techniques: Array[String] = []
 var equipped_techniques: Array[String] = []
@@ -1002,17 +1004,36 @@ func get_quality_bonus() -> float:
 	return get_effect_sum("quality_pct")
 
 
-## 洞府灵气反哺：已播种灵田数量 → 吐纳修为 / 丹道双倍
+## 洞府灵气反哺唯一计算出口：面板显示、吐纳乘区、丹道双倍全部读这里
+## （基础 = 每块已播种灵田 3% / 2%；灵脉 = 每重 1% 修为、每 2 重 1% 丹道双倍）
+func get_farm_aura_breakdown() -> Dictionary:
+	var planted := 0
+	var soil_level := 0
+	if FarmManager != null:
+		planted = FarmManager.count_planted()
+		soil_level = FarmManager.soil_spirit_level
+	var plot_cultivation := GameFormulas.farm_aura_plot_cultivation(planted)
+	var plot_alchemy := GameFormulas.farm_aura_plot_alchemy(planted)
+	var soil_cultivation := GameFormulas.farm_aura_soil_cultivation(soil_level, planted)
+	var soil_alchemy := GameFormulas.farm_aura_soil_alchemy(soil_level, planted)
+	return {
+		"planted": planted,
+		"soil_level": soil_level,
+		"cultivation": plot_cultivation + soil_cultivation,
+		"alchemy": plot_alchemy + soil_alchemy,
+		"plot_cultivation": plot_cultivation,
+		"plot_alchemy": plot_alchemy,
+		"soil_cultivation": soil_cultivation,
+		"soil_alchemy": soil_alchemy,
+	}
+
+
 func get_farm_aura_cultivation_bonus() -> float:
-	if FarmManager == null:
-		return 0.0
-	return GameFormulas.farm_aura_cultivation(FarmManager.count_planted())
+	return float(get_farm_aura_breakdown()["cultivation"])
 
 
 func get_farm_aura_alchemy_bonus() -> float:
-	if FarmManager == null:
-		return 0.0
-	return GameFormulas.farm_aura_alchemy_double(FarmManager.count_planted())
+	return float(get_farm_aura_breakdown()["alchemy"])
 
 
 func get_cultivation_multiplier() -> float:
@@ -1160,6 +1181,7 @@ func get_crit_chance_raw() -> float:
 	return (GameFormulas.get_technique_bonus("crit_chance")
 		+ get_temper_crit_chance() + get_natal_bonus("crit_chance")
 		+ SpiritRootSystem.get_bonus("crit_chance")
+		+ FishingTeaSystem.get_bonus("crit_chance")
 		+ (_equip_stat("weapon", "crit_bonus")
 		+ _equip_stat("armor", "crit_bonus")) / 100.0)
 

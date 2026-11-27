@@ -22,6 +22,7 @@ var _tween: Tween
 var _origin: Rect2
 var _busy := false
 var _signature_cache := ""
+var _text_accum: float = 0.0
 ## 快捷启程按钮的跳转回调（MainShell 注入 _show_panel）
 var navigate_callback: Callable = Callable()
 
@@ -119,9 +120,14 @@ func _set_corner(radius: float) -> void:
 	_card_style.set_corner_radius_all(int(radius))
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not visible or _busy:
 		return
+	# 文本每 0.25 秒才重设一次，避免逐帧触发布局重排；进度条仍每帧连续更新
+	_text_accum += delta
+	var update_text := _text_accum >= 0.25
+	if update_text:
+		_text_accum = 0.0
 	for entry in _rows:
 		var kind := String(entry.get("kind", "slot"))
 		var bar: ProgressBar = entry.get("bar", null)
@@ -134,7 +140,7 @@ func _process(_delta: float) -> void:
 				0.0, 1.0)
 			if bar != null:
 				bar.value = ratio
-			if value_lbl != null:
+			if update_text and value_lbl != null:
 				value_lbl.text = GameFormulas.format_num(
 					float(maxi(0, int(CombatEngine.enemy_hp))))
 			continue
@@ -145,14 +151,14 @@ func _process(_delta: float) -> void:
 		if action_id == "":
 			if bar != null:
 				bar.value = 0.0
-			if value_lbl != null:
+			if update_text and value_lbl != null:
 				value_lbl.text = ""
 			continue
 		var progress := ActionRunner.get_progress(slot)
 		if bar != null:
 			# 与 ActionCard 完全同向：从左往右蓄势填满 0.0→1.0，满格结算后重置
 			bar.value = clampf(progress, 0.0, 1.0)
-		if value_lbl != null:
+		if update_text and value_lbl != null:
 			var left := ActionRunner.get_effective_interval(action_id) * (1.0 - progress)
 			value_lbl.text = "%.1fs" % maxf(0.0, left)
 	var signature := _state_signature()
@@ -272,6 +278,8 @@ func _build_mid(name_text: String, grade_item_id: String, idle: bool) -> Diction
 	value_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	top.add_child(value_lbl)
 	var bar := ThemeBuilder.mini_countdown_bar(ThemeBuilder.COLOR_JADE)
+	bar.max_value = 1.0
+	bar.step = 0.0
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	mid.add_child(bar)
@@ -360,8 +368,8 @@ func _build_slot_row(slot: int) -> Control:
 			"font_color", ThemeBuilder.COLOR_TEXT)
 	row.add_child(mid_data["mid"])
 	var bar: ProgressBar = mid_data["bar"]
-	bar.add_theme_stylebox_override("fill",
-		ThemeBuilder.flat_box(ThemeBuilder.slot_dot_color(slot), 3, 0, 0))
+	# 三才进度条与动作卡 / 右栏严格同色：主修翠玉绿 · 分神靛青蓝 · 化身紫霄紫
+	ThemeBuilder.set_bar_fill(bar, ThemeBuilder.slot_dot_color(slot), 3)
 
 	# 列 4：双图标操作（仅运转中）
 	if action != null:

@@ -162,16 +162,194 @@ func get_device_id() -> String:
 
 ## 天道演化：本地已挂载的最新补丁卷号（无档/损坏一律回 0）
 func get_current_patch_rev() -> int:
+	return int(read_patch_state().get("current_patch_rev", 0))
+
+
+# ---------------------------------------------------------------- 热更志（更新日志）
+
+const PATCH_NOTES_LIMIT: int = 10
+const PATCH_NOTES_FALLBACK: String = "玉简微调优化，灵脉运转更顺畅"
+
+
+func patch_state_defaults() -> Dictionary:
+	return {
+		"current_patch_rev": 0,
+		"installed_patches": [],
+		"notes": [],
+		"last_seen_notes_rev": 0,
+	}
+
+
+## 旧档兼容：缺 notes / last_seen_notes_rev 时补默认值，不删任何既有字段
+func normalize_patch_state(state: Dictionary) -> Dictionary:
+	var out := state.duplicate(true)
+	out["current_patch_rev"] = maxi(0, int(out.get("current_patch_rev", 0)))
+	var installed: Variant = out.get("installed_patches", [])
+	out["installed_patches"] = installed if typeof(installed) == TYPE_ARRAY else []
+	out["last_seen_notes_rev"] = maxi(0, int(out.get("last_seen_notes_rev", 0)))
+	var raw_notes: Variant = out.get("notes", [])
+	var notes: Array = []
+	if typeof(raw_notes) == TYPE_ARRAY:
+		for note_value in raw_notes:
+			if typeof(note_value) != TYPE_DICTIONARY:
+				continue
+			var note: Dictionary = note_value
+			var rev := int(note.get("rev", 0))
+			if rev <= 0:
+				continue
+			var body := String(note.get("notes", "")).strip_edges()
+			if body == "":
+				body = PATCH_NOTES_FALLBACK
+			notes.append({
+				"rev": rev,
+				"notes": body,
+				"created_at": String(note.get("created_at", "")),
+			})
+	notes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["rev"]) > int(b["rev"]))
+	if notes.size() > PATCH_NOTES_LIMIT:
+		notes.resize(PATCH_NOTES_LIMIT)
+	out["notes"] = notes
+	return out
+
+
+func read_patch_state() -> Dictionary:
 	if not FileAccess.file_exists(PATCH_STATE_PATH):
-		return 0
+		return patch_state_defaults()
 	var file := FileAccess.open(PATCH_STATE_PATH, FileAccess.READ)
 	if file == null:
-		return 0
+		return patch_state_defaults()
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	file.close()
 	if typeof(parsed) != TYPE_DICTIONARY:
-		return 0
-	return maxi(0, int((parsed as Dictionary).get("current_patch_rev", 0)))
+		return patch_state_defaults()
+	return normalize_patch_state(parsed as Dictionary)
+
+
+func write_patch_state(state: Dictionary) -> void:
+	var file := FileAccess.open(PATCH_STATE_PATH, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(normalize_patch_state(state)))
+	file.close()
+
+
+## 把清单里的 patches[] 摘要并入 state（BootScene 在保存前调用；不负责落盘）
+func record_patch_notes_in_state(state: Dictionary, patches: Array) -> void:
+	var by_rev: Dictionary = {}
+	var existing_notes: Variant = state.get("notes", [])
+	if typeof(existing_notes) == TYPE_ARRAY:
+		for note_value in existing_notes:
+			if typeof(note_value) == TYPE_DICTIONARY:
+				var existing: Dictionary = note_value
+				var existing_rev := int(existing.get("rev", 0))
+				if existing_rev > 0:
+					by_rev[existing_rev] = existing.duplicate()
+	for patch_value in patches:
+		if typeof(patch_value) != TYPE_DICTIONARY:
+			continue
+		var patch: Dictionary = patch_value
+		var rev := int(patch.get("rev", 0))
+		if rev <= 0:
+			continue
+		var body := String(patch.get("notes", "")).strip_edges()
+		if body == "":
+			body = PATCH_NOTES_FALLBACK
+		by_rev[rev] = {
+			"rev": rev,
+			"notes": body,
+			"created_at": String(patch.get("created_at", "")),
+		}
+	var merged: Array = []
+	for rev in by_rev.keys():
+		merged.append(by_rev[rev])
+	merged.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["rev"]) > int(b["rev"]))
+	if merged.size() > PATCH_NOTES_LIMIT:
+		merged.resize(PATCH_NOTES_LIMIT)
+	state["notes"] = merged
+
+
+## 近几卷更新说明（倒序）
+func get_patch_notes() -> Array:
+	return read_patch_state().get("notes", [])
+
+
+func get_last_seen_notes_rev() -> int:
+	return int(read_patch_state().get("last_seen_notes_rev", 0))
+
+
+## 已读回执：只推进 last_seen_notes_rev，不动补丁挂载状态
+func mark_patch_notes_seen(rev: int) -> void:
+	var state := read_patch_state()
+	var current := maxi(int(state.get("current_patch_rev", 0)), rev)
+	state["last_seen_notes_rev"] = maxi(int(state.get("last_seen_notes_rev", 0)), current)
+	write_patch_state(state)
+
+
+## 未读更新志：当前卷大于已读卷时返回对应说明；该卷缺 notes 时补修仙默认说明
+func get_unseen_patch_notes(current_rev: int = -1) -> Array:
+	var state := read_patch_state()
+	var current := current_rev if current_rev >= 0 \
+		else int(state.get("current_patch_rev", 0))
+	var last := int(state.get("last_seen_notes_rev", 0))
+	var out: Array = []
+	var saved_notes: Variant = state.get("notes", [])
+	if typeof(saved_notes) == TYPE_ARRAY:
+		for note_value in saved_notes:
+			if typeof(note_value) != TYPE_DICTIONARY:
+				continue
+			var note: Dictionary = note_value
+			var rev := int(note.get("rev", 0))
+			if rev > last and rev <= current:
+				out.append(note.duplicate())
+	if out.is_empty() and current > 0 and current > last:
+		out.append({"rev": current, "notes": PATCH_NOTES_FALLBACK, "created_at": ""})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["rev"]) > int(b["rev"]))
+	return out
+
+
+## RFC3339 → 东八区「YYYY-MM-DD HH:MM」；空值才回退「未记时辰」。
+## 保留旧档已有的纯日期 / 自定义时间字符串原样展示，不丢服务端数据。
+func format_patch_date(created_at: String) -> String:
+	var raw := created_at.strip_edges()
+	if raw == "":
+		return "未记时辰"
+	var t_pos := raw.find("T")
+	if t_pos <= 0:
+		return raw
+	var date_part := raw.substr(0, t_pos)
+	var time_part := raw.substr(t_pos + 1)
+	var delta_hours := 0.0
+	if time_part.ends_with("Z"):
+		# 服务端 UTC：统一换算到东八区展示
+		delta_hours = 8.0
+		time_part = time_part.substr(0, time_part.length() - 1)
+	else:
+		var sign_pos := time_part.find("+")
+		if sign_pos < 0:
+			sign_pos = time_part.find("-", 1)
+		if sign_pos >= 0:
+			var offset_text := time_part.substr(sign_pos + 1)
+			var off_h := int(offset_text.substr(0, 2)) if offset_text.length() >= 2 else 0
+			var off_m := int(offset_text.substr(3, 2)) if offset_text.length() >= 5 else 0
+			var offset := float(off_h) + float(off_m) / 60.0
+			if time_part[sign_pos] == "-":
+				offset = -offset
+			delta_hours = 8.0 - offset
+			time_part = time_part.substr(0, sign_pos)
+	if time_part.length() < 5:
+		return raw
+	var stamp := Time.get_unix_time_from_datetime_string(
+		date_part + "T" + time_part.substr(0, 5) + ":00Z")
+	if stamp <= 0:
+		return raw
+	stamp += int(round(delta_hours * 3600.0))
+	var formatted := Time.get_datetime_string_from_unix_time(stamp, false)
+	if formatted.length() >= 16:
+		return formatted.substr(0, 10) + " " + formatted.substr(11, 5)
+	return raw
 
 
 func has_token() -> bool:
